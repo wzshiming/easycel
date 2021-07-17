@@ -20,11 +20,14 @@ type Provider struct {
 	vars      *varStore
 }
 
-func NewProvider() *Provider {
+func NewProvider() (*Provider, error) {
 	p := &Provider{}
 
-	registry := types.NewRegistry()
-	adapter := newAdapter()
+	registry, err := types.NewRegistry()
+	if err != nil {
+		return nil, err
+	}
+	adapter := newAdapter(p)
 	functions := newFunctionStore(adapter)
 	vars := newVarStore()
 
@@ -33,7 +36,7 @@ func NewProvider() *Provider {
 	p.functions = functions
 	p.vars = vars
 
-	return p
+	return p, nil
 }
 
 func (p *Provider) Registry(name string, v interface{}) error {

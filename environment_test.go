@@ -66,8 +66,10 @@ func (c SayHi) CelVal() ref.Val {
 }
 
 func TestAll(t *testing.T) {
-
-	provider := NewProvider()
+	provider ,err := NewProvider()
+	if err!= nil {
+		t.Fatal(err )
+	}
 	global := map[string]interface{}{
 		"vars.string": types.String("xx"),
 		"vars.int":    types.Int(1),
