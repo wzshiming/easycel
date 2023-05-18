@@ -16,18 +16,21 @@ import (
 type functionStore struct {
 	decls     map[string][]*exprpb.Decl_FunctionDecl_Overload
 	overloads []*functions.Overload
-	adapter   *adapter
+	adapter   ref.TypeAdapter
 	uniq      map[string]struct{}
+	tagName   string
 }
 
-func newFunctionStore(adapter *adapter) *functionStore {
+func newFunctionStore(adapter ref.TypeAdapter, tagName string) *functionStore {
 	return &functionStore{
 		decls:   map[string][]*exprpb.Decl_FunctionDecl_Overload{},
 		adapter: adapter,
 		uniq:    map[string]struct{}{},
+		tagName: tagName,
 	}
 }
 
+// CompileOptions returns the CEL environment options for the function store.
 func (f *functionStore) CompileOptions() []cel.EnvOption {
 	out := []cel.EnvOption{}
 	if len(f.decls) != 0 {
@@ -43,6 +46,7 @@ func (f *functionStore) CompileOptions() []cel.EnvOption {
 	return out
 }
 
+// ProgramOptions returns the CEL program options for the function store.
 func (f *functionStore) ProgramOptions() []cel.ProgramOption {
 	out := []cel.ProgramOption{}
 	if len(f.overloads) != 0 {
@@ -84,20 +88,21 @@ func (f *functionStore) uniqCheck(name string) bool {
 	return true
 }
 
-func (f *functionStore) RegisterOverload(name string, operandTrait int, fun reflect.Value) error {
-	operator := getUniqTypeName("overload_"+name, fun.Type())
+// RegisterOverload registers a function overload.
+func (f *functionStore) RegisterOverload(name string, operandTrait int, typ reflect.Type, funVal reflect.Value) error {
+	operator := getUniqTypeName("overload_"+name, typ)
 	if !f.uniqCheck(operator) {
 		return nil
 	}
 
-	ok, err := f.checkFunction(fun)
+	ok, err := f.checkFunction(typ)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return nil
+		return fmt.Errorf("function %s is not a valid", typ)
 	}
-	argTypes, resultType, err := f.getDeclFunc(fun)
+	argTypes, resultType, err := f.getDeclFunc(typ)
 	if err != nil {
 		return err
 	}
@@ -105,23 +110,24 @@ func (f *functionStore) RegisterOverload(name string, operandTrait int, fun refl
 	if err != nil {
 		return err
 	}
-	return f.registerOperator(operator, operandTrait, fun)
+	return f.registerOperator(operator, operandTrait, typ, funVal)
 }
 
-func (f *functionStore) RegisterInstanceOverload(name string, operandTrait int, fun reflect.Value) error {
-	operator := getUniqTypeName("instance_overload_"+name, fun.Type())
+// RegisterInstanceOverload registers a function instance overload.
+func (f *functionStore) RegisterInstanceOverload(name string, operandTrait int, typ reflect.Type, funVal reflect.Value) error {
+	operator := getUniqTypeName("instance_overload_"+name, typ)
 	if !f.uniqCheck(operator) {
 		return nil
 	}
 
-	ok, err := f.checkFunction(fun)
+	ok, err := f.checkFunction(typ)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return nil
 	}
-	argTypes, resultType, err := f.getDeclFunc(fun)
+	argTypes, resultType, err := f.getDeclFunc(typ)
 	if err != nil {
 		return err
 	}
@@ -129,11 +135,11 @@ func (f *functionStore) RegisterInstanceOverload(name string, operandTrait int, 
 	if err != nil {
 		return err
 	}
-	return f.registerOperator(operator, operandTrait, fun)
+	return f.registerOperator(operator, operandTrait, typ, funVal)
 }
 
-func (f *functionStore) registerOperator(operator string, operandTrait int, fun reflect.Value) error {
-	out, err := f.reflectWrapFunc(fun)
+func (f *functionStore) registerOperator(operator string, operandTrait int, typ reflect.Type, funVal reflect.Value) error {
+	out, err := f.reflectWrapFunc(typ, funVal)
 	if err != nil {
 		return err
 	}
@@ -154,44 +160,25 @@ func (f *functionStore) registerInstanceOverload(name string, operator string, a
 	return nil
 }
 
-func (f *functionStore) checkFunction(funVal reflect.Value) (bool, error) {
-	if funVal.Kind() != reflect.Func {
-		return false, fmt.Errorf("must be a function, not a %s", funVal.Kind())
-	}
-	typ := funVal.Type()
-
+func (f *functionStore) checkFunction(typ reflect.Type) (bool, error) {
 	numOut := typ.NumOut()
 	switch numOut {
 	default:
 		return false, fmt.Errorf("too many result")
-	case 0:
-		return false, fmt.Errorf("result is required")
 	case 2:
 		if !typ.Out(1).AssignableTo(errType) {
 			return false, nil
 		}
 		fallthrough
-	case 1:
-		if !typ.Out(0).AssignableTo(celVal) {
-			return false, nil
-		}
+	case 0, 1:
+		// Skip
 	}
 
-	numIn := typ.NumIn()
-	for i := 0; i != numIn; i++ {
-		if !typ.In(i).AssignableTo(celVal) {
-			return false, nil
-		}
-	}
 	return true, nil
 }
 
-func (f *functionStore) getDeclFunc(funVal reflect.Value) (argTypes []*exprpb.Type, resultType *exprpb.Type, err error) {
-	if funVal.Kind() != reflect.Func {
-		return nil, nil, fmt.Errorf("must be a function, not a %s", funVal.Kind())
-	}
-	typ := funVal.Type()
-
+func (f *functionStore) getDeclFunc(typ reflect.Type) (argTypes []*exprpb.Type, resultType *exprpb.Type, err error) {
+	var ok bool
 	numOut := typ.NumOut()
 	switch numOut {
 	default:
@@ -199,9 +186,9 @@ func (f *functionStore) getDeclFunc(funVal reflect.Value) (argTypes []*exprpb.Ty
 	case 0:
 		return nil, nil, fmt.Errorf("result is required")
 	case 1, 2:
-		resultType, err = f.adapter.TypeToPbType(typ.Out(0))
-		if err != nil {
-			return nil, nil, err
+		resultType, ok = convertToExprType(typ.Out(0))
+		if !ok {
+			return nil, nil, fmt.Errorf("the result of function %s is not supported", typ.String())
 		}
 		if resultType == decls.Null {
 			return nil, nil, fmt.Errorf("the result of function %s is unspecified", typ.String())
@@ -211,9 +198,9 @@ func (f *functionStore) getDeclFunc(funVal reflect.Value) (argTypes []*exprpb.Ty
 	numIn := typ.NumIn()
 	argTypes = make([]*exprpb.Type, 0, numIn)
 	for i := 0; i != numIn; i++ {
-		param, err := f.adapter.TypeToPbType(typ.In(i))
-		if err != nil {
-			return nil, nil, err
+		param, ok := convertToExprType(typ.In(i))
+		if !ok {
+			return nil, nil, fmt.Errorf("the %d parameter of function %s is not supported", i, typ.String())
 		}
 		if param == decls.Null {
 			return nil, nil, fmt.Errorf("the %d parameter of function %s is unspecified", i, typ.String())
@@ -223,14 +210,9 @@ func (f *functionStore) getDeclFunc(funVal reflect.Value) (argTypes []*exprpb.Ty
 	return argTypes, resultType, nil
 }
 
-func (f *functionStore) reflectWrapFunc(funVal reflect.Value) (out interface{}, err error) {
-	if funVal.Kind() != reflect.Func {
-		return nil, fmt.Errorf("must be a function, not a %s", funVal.Kind())
-	}
-
-	typ := funVal.Type()
-
+func (f *functionStore) reflectWrapFunc(typ reflect.Type, funVal reflect.Value) (out interface{}, err error) {
 	var needErr bool
+	var ok bool
 	var result *exprpb.Type
 	numOut := typ.NumOut()
 	switch numOut {
@@ -245,9 +227,9 @@ func (f *functionStore) reflectWrapFunc(funVal reflect.Value) (out interface{}, 
 		needErr = true
 		fallthrough
 	case 1:
-		result, err = f.adapter.TypeToPbType(typ.Out(0))
-		if err != nil {
-			return nil, err
+		result, ok = convertToExprType(typ.Out(0))
+		if !ok {
+			return nil, fmt.Errorf("the result of function %s is not supported", typ.String())
 		}
 		if result == decls.Null {
 			return nil, fmt.Errorf("the result of function %s is unspecified", typ.String())
@@ -256,9 +238,9 @@ func (f *functionStore) reflectWrapFunc(funVal reflect.Value) (out interface{}, 
 
 	numIn := typ.NumIn()
 	for i := 0; i != numIn; i++ {
-		param, err := f.adapter.TypeToPbType(typ.In(i))
-		if err != nil {
-			return nil, err
+		param, ok := convertToExprType(typ.In(i))
+		if !ok {
+			return nil, fmt.Errorf("the %d parameter of function %s is not supported", i, typ.String())
 		}
 		if param == decls.Null {
 			return nil, fmt.Errorf("the %d parameter of function %s is unspecified", i, typ.String())
@@ -273,7 +255,7 @@ func (f *functionStore) reflectWrapFunc(funVal reflect.Value) (out interface{}, 
 				return types.NewErr(err.Error())
 			}
 		}
-		out, err := f.adapter.ValueToCelValue(results[0])
+		out, err := convertToRefVal(f.adapter, results[0], f.tagName)
 		if err != nil {
 			return types.NewErr(err.Error())
 		}
@@ -283,11 +265,11 @@ func (f *functionStore) reflectWrapFunc(funVal reflect.Value) (out interface{}, 
 	switch numIn {
 	case 1:
 		return functions.UnaryOp(func(value ref.Val) ref.Val {
-			return funCall([]reflect.Value{reflect.ValueOf(value)})
+			return funCall([]reflect.Value{reflect.ValueOf(value.Value())})
 		}), nil
 	case 2:
 		return functions.BinaryOp(func(lhs ref.Val, rhs ref.Val) ref.Val {
-			return funCall([]reflect.Value{reflect.ValueOf(lhs), reflect.ValueOf(rhs)})
+			return funCall([]reflect.Value{reflect.ValueOf(lhs.Value()), reflect.ValueOf(rhs.Value())})
 		}), nil
 	case 0:
 		return functions.FunctionOp(func(values ...ref.Val) ref.Val {
@@ -297,7 +279,7 @@ func (f *functionStore) reflectWrapFunc(funVal reflect.Value) (out interface{}, 
 		return functions.FunctionOp(func(values ...ref.Val) ref.Val {
 			vals := make([]reflect.Value, 0, len(values))
 			for _, value := range values {
-				vals = append(vals, reflect.ValueOf(value))
+				vals = append(vals, reflect.ValueOf(value.Value()))
 			}
 			return funCall(vals)
 		}), nil

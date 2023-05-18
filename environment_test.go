@@ -1,103 +1,84 @@
-package easycel
+package easycel_test
 
 import (
-	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
-	"github.com/google/cel-go/common/types/ref"
-	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
-)
+	"github.com/google/go-cmp/cmp"
 
-var (
-	testType = types.NewTypeValue("test")
+	"github.com/wzshiming/easycel"
 )
 
 type SayHi struct {
-	Hi string
+	Hi     string `json:"hi"`
+	Target Target `json:"target"`
+	Next   *SayHi `json:"next"`
 }
 
-func (c SayHi) PbType() *exprpb.Type {
-	return NewObject(reflect.TypeOf(c))
-}
-
-func (c SayHi) CelMethods() []string {
-	return []string{"SayHi"}
-}
-
-func (c SayHi) SayHi(m types.String) types.String {
-	return types.String(fmt.Sprintf("%s %s!", c.Hi, m))
-}
-
-func (c SayHi) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
-	return nil, errors.New("cannot convert wrapper value to native adapter")
-}
-
-func (c SayHi) ConvertToType(typeValue ref.Type) ref.Val {
-	return types.NewErr("cannot convert wrapper value  to CEL adapter")
-}
-
-func (c SayHi) Equal(other ref.Val) ref.Val {
-	if other.Type() != testType {
-		return types.NewErr("cannot compare adapter")
-	}
-	w, ok := other.(SayHi)
-	if !ok {
-		return types.NewErr("cannot compare adapter")
-	}
-
-	return types.Bool(c.Hi == w.Hi)
-}
-
-func (c SayHi) Type() ref.Type {
-	return testType
-}
-
-func (c SayHi) Value() interface{} {
-	return c.Hi
-}
-
-func (c SayHi) CelVal() ref.Val {
-	return c
+type Target struct {
+	Name string `json:"name"`
 }
 
 func TestAll(t *testing.T) {
-	provider ,err := NewProvider()
-	if err!= nil {
-		t.Fatal(err )
+	registry, err := easycel.NewRegistry(easycel.WithTagName("json"))
+	if err != nil {
+		t.Fatal(err)
 	}
+
 	global := map[string]interface{}{
-		"vars.string": types.String("xx"),
-		"vars.int":    types.Int(1),
-		"vars.uint":   types.Uint(1),
-		"vars.double": types.Double(1),
-		"vars.sayhi":  SayHi{"Hi"},
-		"vars.map": types.NewStringStringMap(provider, map[string]string{
+		"to_timestamp": func(str string) (time.Time, error) {
+			return time.Parse(time.RFC3339, str)
+		},
+		"vars.string": "xx",
+		"vars.int":    1,
+		"vars.uint":   uint(1),
+		"vars.double": 1.0,
+		"vars.sayhi": SayHi{
+			Hi: "Hi",
+			Target: Target{
+				Name: "CEL",
+			},
+			Next: &SayHi{
+				Hi: "Hello",
+				Target: Target{
+					Name: "Golang",
+				},
+			},
+		},
+		"SayHi": func(s SayHi) string {
+			return s.Hi
+		},
+		"vars.map": map[string]string{
 			"kv": "vv",
-		}),
-		"vars.list": types.NewStringList(provider, []string{"v0", "v1"}),
-		"vars.to_upper": func(s1 types.String) types.String {
-			return types.String(strings.ToUpper(string(s1)))
 		},
-		"vars.add": func(s1, s2 types.String) types.String {
-			return types.String(fmt.Sprintf("%s.%s", s1, s2))
+		"vars.list":     []string{"v0", "v1"},
+		"vars.to_upper": strings.ToUpper,
+		"vars.add": func(s1, s2 string) string {
+			return fmt.Sprintf("%s.%s", s1, s2)
 		},
-		"vars.fix": func() types.String {
-			return types.String("fix")
+		"vars.fix": func() string {
+			return "fix"
+		},
+		"xxx": map[string]interface{}{
+			"yyy": map[string]interface{}{
+				"zzz": map[string]interface{}{
+					"kkk": "vvv",
+				},
+			},
 		},
 	}
 
 	for n, v := range global {
-		err := provider.Registry(n, v)
+		err := registry.Register(n, v)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	env, err := NewEnvironment(provider.CompileOptions()...)
+	env, err := easycel.NewEnvironmentWithExtensions(registry.CompileOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,109 +91,119 @@ func TestAll(t *testing.T) {
 	tests := []struct {
 		name           string
 		args           args
-		want           ref.Val
+		want           any
 		wantProgramErr bool
 		wantEvalErr    bool
 	}{
 		{
 			args: args{
+				src: `xxx.yyy.zzz`,
+			},
+			want: map[string]interface{}{
+				"kkk": "vvv",
+			},
+		},
+		{
+			args: args{
 				src: `vars.int + 1`,
 			},
-			want: types.Int(2),
+			want: int64(2),
 		},
 		{
 			args: args{
 				src: `vars.uint + uint(1)`,
 			},
-			want: types.Uint(2),
+			want: uint64(2),
 		},
 		{
 			args: args{
 				src: `vars.double + 1.1`,
 			},
-			want: types.Double(2.1),
+			want: 2.1,
 		},
 		{
 			args: args{
 				src: `vars.string + 'str'`,
 			},
-			want: types.String("xxstr"),
+			want: "xxstr",
 		},
 		{
 			args: args{
-				src: `vars.sayhi.SayHi("world")`,
+				src: `vars.sayhi.hi`,
 			},
-			want: types.String("Hi world!"),
+			want: "Hi",
 		},
 		{
 			args: args{
-				src: `vars.sayhi.SayHi(vars.string)`,
+				src: `SayHi(vars.sayhi)`,
 			},
-			want: types.String("Hi xx!"),
+			want: "Hi",
 		},
 		{
 			args: args{
-				src: `vars.sayhi.SayHi("world")`,
-				vars: map[string]interface{}{
-					"vars.sayhi": SayHi{"Hello"},
-				},
+				src: `vars.sayhi.SayHi()`,
 			},
-			want: types.String("Hello world!"),
+			want: "Hi",
 		},
 		{
 			args: args{
-				src: `vars.map["kv"]`,
+				src: `vars.sayhi.next.SayHi()`,
 			},
-			want: types.String("vv"),
+			want: "Hello",
 		},
 		{
 			args: args{
-				src: `vars.map["kv0"]`,
+				src: `vars.sayhi.hi + " " + vars.sayhi.target.name`,
 			},
-			wantEvalErr: true,
-			want:        types.NewErr("no such key: kv0"),
+			want: "Hi CEL",
 		},
 		{
 			args: args{
 				src: `size(vars.string)`,
 			},
-			want: types.Int(2),
+			want: int64(2),
 		},
 		{
 			args: args{
 				src: `vars.list[0]`,
 			},
-			want: types.String("v0"),
+			want: "v0",
 		},
 		{
 			args: args{
 				src: `vars.list + ['v2']`,
 			},
-			want: types.NewDynamicList(provider, []interface{}{"v0", "v1", "v2"}),
+			want: []interface{}{"v0", "v1", "v2"},
 		},
 		{
 			args: args{
 				src: `vars.add(vars.map['kv'], 'xx')`,
 			},
-			want: types.String("vv.xx"),
+			want: "vv.xx",
 		},
 		{
 			args: args{
 				src: `vars.to_upper('xx')`,
 			},
-			want: types.String("XX"),
+			want: "XX",
 		},
 		{
 			args: args{
 				src: `vars.fix()`,
 			},
-			want: types.String("fix"),
+			want: "fix",
 		},
 		{
 			args: args{
 				src: `'z' in ['x', 'y', 'z']`,
 			},
-			want: types.True,
+			want: true,
+		},
+		{
+			args: args{
+				src: `to_timestamp('2020-01-01T00:00:00Z')`,
+			},
+			want: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
 	for _, tt := range tests {
@@ -227,14 +218,62 @@ func TestAll(t *testing.T) {
 			if m == nil {
 				m = map[string]interface{}{}
 			}
-			got, _, err := prg.Eval(m)
+			gotVal, _, err := prg.Eval(m)
 			if (err != nil) != tt.wantEvalErr {
 				t.Errorf("Eval() error = %v, wantErr %v", err, tt.wantEvalErr)
 				return
 			}
 
-			if !reflect.DeepEqual(got.Value(), tt.want.Value()) {
-				t.Errorf("Eval() got = %v, want %v", got.Value(), tt.want.Value())
+			if types.IsError(gotVal) {
+				t.Errorf("Eval() error = %v", gotVal)
+				return
+			}
+
+			got := gotVal.Value()
+
+			if diff := cmp.Diff(got, tt.want); diff != "" {
+				t.Errorf("Eval() diff = %v", diff)
+			}
+		})
+	}
+}
+
+func BenchmarkAll(b *testing.B) {
+	registry, err := easycel.NewRegistry()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var testdatas = []string{
+		`1`,
+		`2 + 2`,
+		`2 - 2`,
+		`2 * 2`,
+		`2 / 2`,
+		`2 % 2`,
+		`2 + 2 * 2`,
+		`2 + 2 * 2 + 2`,
+	}
+
+	for _, data := range testdatas {
+		b.Run(data, func(b *testing.B) {
+			env, err := easycel.NewEnvironment(registry.CompileOptions()...)
+			if err != nil {
+				b.Fatal(err)
+			}
+			prg, err := env.Program(data)
+			if err != nil {
+				b.Fatal(err)
+				return
+			}
+
+			m := map[string]interface{}{}
+			for i := 0; i < b.N; i++ {
+				_, _, err := prg.Eval(m)
+				if err != nil {
+					b.Fatal(err)
+					return
+				}
 			}
 		})
 	}
