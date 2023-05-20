@@ -49,9 +49,5 @@ func (e *Environment) Program(src string, opts ...cel.ProgramOption) (cel.Progra
 	if issue != nil && issue.Err() != nil {
 		return nil, issue.Err()
 	}
-	ast, issue = e.env.Check(ast)
-	if issue != nil && issue.Err() != nil {
-		return nil, issue.Err()
-	}
 	return e.env.Program(ast, opts...)
 }
