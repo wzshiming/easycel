@@ -2,13 +2,13 @@ package easycel
 
 import (
 	"reflect"
-	"time"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/common/types"
-	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/checker/decls"
+	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
+// convertToCelType converts the Golang reflect.Type to CEL type
 func convertToCelType(refType reflect.Type) (*cel.Type, bool) {
 	switch refType.Kind() {
 	case reflect.Pointer:
@@ -22,7 +22,7 @@ func convertToCelType(refType reflect.Type) (*cel.Type, bool) {
 	case reflect.Float32, reflect.Float64:
 		return cel.DoubleType, true
 	case reflect.Int64:
-		if refType == durationType {
+		if refType == durationType || refType == typesDurationType {
 			return cel.DurationType, true
 		}
 		return cel.IntType, true
@@ -59,7 +59,7 @@ func convertToCelType(refType reflect.Type) (*cel.Type, bool) {
 		}
 		return cel.MapType(keyType, elemType), true
 	case reflect.Struct:
-		if refType == timestampType {
+		if refType == timestampType || refType == typesTimestampType {
 			return cel.TimestampType, true
 		}
 		return cel.ObjectType(typeName(refType)), true
@@ -69,89 +69,58 @@ func convertToCelType(refType reflect.Type) (*cel.Type, bool) {
 	return nil, false
 }
 
-func NativeToValue(i any) ref.Val {
-	return generalAdapter{}.NativeToValue(i)
-}
-
-type generalAdapter struct {
-	baseAdapter ref.TypeAdapter
-}
-
-func (a generalAdapter) NativeToValue(i any) ref.Val {
-	if i == nil {
-		return types.NullValue
-	}
-	switch v := i.(type) {
-	case ref.Val:
-		return v
-	case map[string]any:
-		return types.NewStringInterfaceMap(a, v)
-	case map[string]string:
-		return types.NewStringStringMap(a, v)
-	case []string:
-		return types.NewStringList(a, v)
-	}
-
-	val := reflect.ValueOf(i)
-	switch val.Kind() {
+// convertToExprType converts the Golang reflect.Type to a protobuf exprpb.Type.
+func convertToExprType(refType reflect.Type) (*exprpb.Type, bool) {
+	switch refType.Kind() {
 	case reflect.Pointer:
-		if val.IsNil() {
-			return types.NullValue
-		}
-		return a.NativeToValue(val.Elem().Interface())
+		return convertToExprType(refType.Elem())
 	case reflect.Bool:
-		return types.Bool(val.Bool())
-	case reflect.Float64, reflect.Float32:
-		return types.Double(val.Float())
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return types.Int(val.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return types.Uint(val.Uint())
+		return decls.Bool, true
+	case reflect.Float32, reflect.Float64:
+		return decls.Double, true
+	case reflect.Int64:
+		if refType == durationType || refType == typesDurationType {
+			return decls.Duration, true
+		}
+		return decls.Int, true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
+		return decls.Int, true
 	case reflect.String:
-		return types.String(val.String())
+		return decls.String, true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return decls.Uint, true
 	case reflect.Slice:
-		if val.IsNil() {
-			return types.NullValue
+		refElem := refType.Elem()
+		if refElem == byteType {
+			return decls.Bytes, true
 		}
-		if val.Type().Elem().Kind() == reflect.Uint8 {
-			return types.Bytes(val.Bytes())
+		elemType, ok := convertToExprType(refElem)
+		if !ok {
+			return nil, false
 		}
-		fallthrough
+		return decls.NewListType(elemType), true
 	case reflect.Array:
-		sz := val.Len()
-		elems := make([]ref.Val, 0, sz)
-		for i := 0; i < sz; i++ {
-			v := a.NativeToValue(val.Index(i).Interface())
-			elems = append(elems, v)
+		refElem := refType.Elem()
+		elemType, ok := convertToExprType(refElem)
+		if !ok {
+			return nil, false
 		}
-		return types.NewRefValList(a, elems)
+		return decls.NewListType(elemType), true
 	case reflect.Map:
-		if val.IsNil() {
-			return types.NullValue
+		keyType, ok := convertToExprType(refType.Key())
+		if !ok {
+			return nil, false
 		}
-		entries := map[ref.Val]ref.Val{}
-		iter := val.MapRange()
-		for iter.Next() {
-			k := iter.Key()
-			v := iter.Value()
-			kv := a.NativeToValue(k.Interface())
-			vv := a.NativeToValue(v.Interface())
-			entries[kv] = vv
+		elemType, ok := convertToExprType(refType.Elem())
+		if !ok {
+			return nil, false
 		}
-		return types.NewRefValMap(a, entries)
-	case reflect.Interface:
-		if val.IsNil() {
-			return types.NullValue
-		}
-		return a.NativeToValue(val.Elem().Interface())
+		return decls.NewMapType(keyType, elemType), true
 	case reflect.Struct:
-		if val.Type() == timestampType {
-			return types.Timestamp{Time: val.Interface().(time.Time)}
+		if refType == timestampType || refType == typesTimestampType {
+			return decls.Timestamp, true
 		}
+		return decls.NewObjectType(typeName(refType)), true
 	}
-
-	if a.baseAdapter != nil {
-		return a.baseAdapter.NativeToValue(i)
-	}
-	return types.UnsupportedRefValConversionErr(i)
+	return nil, false
 }

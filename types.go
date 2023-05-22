@@ -5,12 +5,15 @@ import (
 	"time"
 
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 )
 
 var (
 	timestampType         = reflect.TypeOf(time.Now())
+	typesTimestampType    = reflect.TypeOf(types.Timestamp{})
 	durationType          = reflect.TypeOf(time.Nanosecond)
+	typesDurationType     = reflect.TypeOf(types.Duration{})
 	byteType              = reflect.TypeOf(byte(0))
 	errorType             = reflect.TypeOf((*error)(nil)).Elem()
 	traitsAdderType       = reflect.TypeOf((*traits.Adder)(nil)).Elem()
@@ -28,26 +31,24 @@ var (
 	traitsReceiverType    = reflect.TypeOf((*traits.Receiver)(nil)).Elem()
 	traitsSizerType       = reflect.TypeOf((*traits.Sizer)(nil)).Elem()
 	traitsSubtractorType  = reflect.TypeOf((*traits.Subtractor)(nil)).Elem()
-
-	traitMapperType = reflect.TypeOf((*traits.Mapper)(nil)).Elem()
-	traitListerType = reflect.TypeOf((*traits.Lister)(nil)).Elem()
+	refValType            = reflect.TypeOf((*ref.Val)(nil)).Elem()
 )
 
 var typeValueMap = map[reflect.Type]*types.TypeValue{}
 
-func GetTypeValue(typ reflect.Type) *types.TypeValue {
+func getTypeValue(typ reflect.Type) *types.TypeValue {
 	if refType, ok := typeValueMap[typ]; ok {
 		return refType
 	}
 
-	refType := types.NewTypeValue(typeName(typ), GetTrait(typ))
+	refType := types.NewTypeValue(typeName(typ), getTrait(typ))
 	typeValueMap[typ] = refType
 	return refType
 }
 
 var typeTraitMap = map[reflect.Type]int{}
 
-func GetTrait(typ reflect.Type) int {
+func getTrait(typ reflect.Type) int {
 	trait, ok := typeTraitMap[typ]
 	if ok {
 		return trait
