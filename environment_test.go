@@ -1,6 +1,7 @@
 package easycel_test
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 
 	"github.com/wzshiming/easycel"
 )
@@ -44,6 +46,18 @@ func TestAll(t *testing.T) {
 				},
 			},
 			want: types.String("world"),
+		},
+		{
+			src:   "msg.list[0].message",
+			types: []any{Message{}},
+			vars: map[string]any{
+				"msg": Message{
+					List: []*Message{
+						{Message: "hello"},
+					},
+				},
+			},
+			want: types.String("hello"),
 		},
 		{
 			src: "msg",
@@ -117,6 +131,28 @@ func TestAll(t *testing.T) {
 				},
 			},
 			methods: map[string][]any{
+				"unix": {
+					func(t types.Timestamp) int64 {
+						return t.Unix()
+					},
+				},
+			},
+			vars: map[string]any{
+				"msg": Message{
+					Time: Timestamp{time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+				},
+			},
+			want: types.Int(1577836800),
+		},
+		{
+			src:   "unix(msg.time)",
+			types: []any{Message{}, Meta{}, Timestamp{}},
+			conversions: []any{
+				func(t Timestamp) types.Timestamp {
+					return types.Timestamp{t.Time}
+				},
+			},
+			funcs: map[string][]any{
 				"unix": {
 					func(t types.Timestamp) int64 {
 						return t.Unix()
@@ -312,6 +348,217 @@ func TestAll(t *testing.T) {
 			},
 			want: types.String("hello"),
 		},
+		{
+			src: "Number(1) + 1",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  Number{2},
+		},
+		{
+			src: "Number(2) - 1",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  Number{1},
+		},
+		{
+			src: "-Number(1)",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  Number{-1},
+		},
+		{
+			src: "Number(2) * 2",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  Number{4},
+		},
+		{
+			src: "Number(10) / 2",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  Number{5},
+		},
+		{
+			src: "Number(10) == Number(5)",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  types.False,
+		},
+		{
+			src: "Number(10) != Number(5)",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  types.True,
+		},
+		{
+			src: "Number(10) > Number(5)",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  types.True,
+		},
+		{
+			src: "Number(10) < Number(5)",
+			funcs: map[string][]any{
+				"Number": {
+					func(i types.Int) Number {
+						return Number{int(i)}
+					},
+				},
+			},
+			types: []any{Number{}},
+			want:  types.False,
+		},
+		{
+			src: `size(m)`,
+			vars: map[string]any{
+				"m": Map{
+					Map: map[string]string{
+						"foo": "bar",
+					},
+				},
+			},
+			types: []any{Map{}},
+			want:  types.Int(1),
+		},
+		{
+			src: `"foo" in m`,
+			vars: map[string]any{
+				"m": Map{
+					Map: map[string]string{
+						"foo": "bar",
+					},
+				},
+			},
+			types: []any{Map{}},
+			want:  types.True,
+		},
+		{
+			src: `m["foo"]`,
+			vars: map[string]any{
+				"m": Map{
+					Map: map[string]string{
+						"foo": "bar",
+					},
+				},
+			},
+			types: []any{Map{}},
+			want:  types.String("bar"),
+		},
+		// TODO
+		//{
+		//	src: `m.foo`,
+		//	vars: map[string]any{
+		//		"m": Map{
+		//			Map: map[string]string{
+		//				"foo": "bar",
+		//			},
+		//		},
+		//	},
+		//	types: []any{Map{}},
+		//	want:  types.String("bar"),
+		//},
+		//{
+		//	src: `has(m.foo)`,
+		//	vars: map[string]any{
+		//		"m": Map{
+		//			Map: map[string]string{
+		//				"foo": "bar",
+		//			},
+		//		},
+		//	},
+		//	types: []any{Map{}},
+		//	want:  types.True,
+		//},
+		{
+			src: `s + s`,
+			vars: map[string]any{
+				"s": Slice{
+					Slice: []string{"foo", "bar"},
+				},
+			},
+			types: []any{Slice{}},
+			want: Slice{
+				Slice: []string{"foo", "bar", "foo", "bar"},
+			},
+		},
+		{
+			src: `size(s)`,
+			vars: map[string]any{
+				"s": Slice{
+					Slice: []string{"foo", "bar"},
+				},
+			},
+			types: []any{Slice{}},
+			want:  types.Int(2),
+		},
+		{
+			src: `"foo" in s`,
+			vars: map[string]any{
+				"s": Slice{
+					Slice: []string{"foo", "bar"},
+				},
+			},
+			types: []any{Slice{}},
+			want:  types.True,
+		},
+		{
+			src: `s[0]`,
+			vars: map[string]any{
+				"s": Slice{
+					Slice: []string{"foo", "bar"},
+				},
+			},
+			types: []any{Slice{}},
+			want:  types.String("foo"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.src, func(t *testing.T) {
@@ -386,10 +633,12 @@ func TestAll(t *testing.T) {
 }
 
 type Message struct {
-	Meta    Meta      `json:"meta"`
-	Message string    `json:"message"`
-	Next    *Message  `json:"next"`
-	Time    Timestamp `json:"time"`
+	Meta    Meta       `json:"meta"`
+	Message string     `json:"message"`
+	Next    *Message   `json:"next"`
+	Time    Timestamp  `json:"time"`
+	List    []*Message `json:"list"`
+	_       int
 }
 
 type Meta struct {
@@ -398,4 +647,211 @@ type Meta struct {
 
 type Timestamp struct {
 	time.Time
+}
+
+type Number struct {
+	Number int
+}
+
+var (
+	NumberType = cel.ObjectType("my_number",
+		traits.AdderType,
+		traits.SubtractorType,
+		traits.NegatorType,
+		traits.MultiplierType,
+		traits.DividerType,
+		traits.ComparerType,
+	)
+)
+
+func (n Number) ConvertToNative(typeDesc reflect.Type) (any, error) {
+	return nil, fmt.Errorf("unsupported conversion from 'number' to '%v'", typeDesc)
+}
+
+func (n Number) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion error from '%s' to '%s'", NumberType, typeValue)
+}
+
+func (n Number) Equal(other ref.Val) ref.Val {
+	v, ok := other.(Number)
+	if !ok {
+		return types.False
+	}
+	return types.Bool(v.Number == n.Number)
+}
+
+func (n Number) Type() ref.Type {
+	return NumberType
+}
+
+func (n Number) Value() any {
+	return n.Number
+}
+
+func (n Number) Add(other ref.Val) ref.Val {
+	return Number{n.Number + int(other.(types.Int))}
+}
+
+func (n Number) Subtract(other ref.Val) ref.Val {
+	return Number{n.Number - int(other.(types.Int))}
+}
+
+func (n Number) Negate() ref.Val {
+	return Number{-n.Number}
+}
+
+func (n Number) Multiply(other ref.Val) ref.Val {
+	return Number{n.Number * int(other.(types.Int))}
+}
+
+func (n Number) Divide(other ref.Val) ref.Val {
+	return Number{n.Number / int(other.(types.Int))}
+}
+
+func (n Number) Compare(other ref.Val) ref.Val {
+	v, ok := other.(Number)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(other)
+	}
+	if n.Number < v.Number {
+		return types.Int(-1)
+	}
+	if n.Number > v.Number {
+		return types.Int(1)
+	}
+	return types.Int(0)
+}
+
+var (
+	MapType = cel.ObjectType("my_map",
+		traits.ContainerType,
+		traits.IndexerType,
+		traits.SizerType,
+	)
+)
+
+type Map struct {
+	Map map[string]string
+}
+
+func (m Map) ConvertToNative(typeDesc reflect.Type) (any, error) {
+	return nil, fmt.Errorf("unsupported conversion from 'map' to '%v'", typeDesc)
+}
+
+func (m Map) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion error from '%s' to '%s'", MapType, typeValue)
+}
+
+func (m Map) Equal(other ref.Val) ref.Val {
+	v, ok := other.(Map)
+	if !ok {
+		return types.False
+	}
+	return types.Bool(reflect.DeepEqual(v.Map, m.Map))
+}
+
+func (m Map) Type() ref.Type {
+	return MapType
+}
+
+func (m Map) Value() any {
+	return m.Map
+}
+
+func (m Map) Size() ref.Val {
+	return types.Int(len(m.Map))
+}
+
+func (m Map) Contains(index ref.Val) ref.Val {
+	key, ok := index.(types.String)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(index)
+	}
+	_, found := m.Map[string(key)]
+	return types.Bool(found)
+}
+
+func (m Map) Get(index ref.Val) ref.Val {
+	key, ok := index.(types.String)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(index)
+	}
+	val, found := m.Map[string(key)]
+	if !found {
+		return types.String("")
+	}
+	return types.String(val)
+}
+
+var (
+	SliceType = cel.ObjectType("my_slice",
+		traits.AdderType,
+		traits.ContainerType,
+		traits.IndexerType,
+		traits.SizerType,
+	)
+)
+
+type Slice struct {
+	Slice []string
+}
+
+func (s Slice) ConvertToNative(typeDesc reflect.Type) (any, error) {
+	return nil, fmt.Errorf("unsupported conversion from 'slice' to '%v'", typeDesc)
+}
+
+func (s Slice) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion error from '%s' to '%s'", SliceType, typeValue)
+}
+
+func (s Slice) Equal(other ref.Val) ref.Val {
+	v, ok := other.(Slice)
+	if !ok {
+		return types.False
+	}
+	return types.Bool(reflect.DeepEqual(v.Slice, s.Slice))
+}
+
+func (s Slice) Type() ref.Type {
+	return SliceType
+}
+
+func (s Slice) Value() any {
+	return s.Slice
+}
+
+func (s Slice) Size() ref.Val {
+	return types.Int(len(s.Slice))
+}
+
+func (s Slice) Add(other ref.Val) ref.Val {
+	v, ok := other.(Slice)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(other)
+	}
+	return Slice{append(s.Slice, v.Slice...)}
+}
+
+func (s Slice) Contains(index ref.Val) ref.Val {
+	key, ok := index.(types.String)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(index)
+	}
+	for _, v := range s.Slice {
+		if v == string(key) {
+			return types.True
+		}
+	}
+	return types.False
+}
+
+func (s Slice) Get(index ref.Val) ref.Val {
+	key, ok := index.(types.Int)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(index)
+	}
+	if int(key) < len(s.Slice) {
+		return types.String(s.Slice[int(key)])
+	}
+	return types.String("")
 }

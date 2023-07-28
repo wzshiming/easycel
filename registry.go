@@ -4,21 +4,22 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/operators"
+	"github.com/google/cel-go/common/overloads"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+	"github.com/google/cel-go/common/types/traits"
 )
 
 type Registry struct {
 	nativeTypeProvider *nativeTypeProvider
 	funcs              map[string][]cel.FunctionOpt
 	variables          map[string]*cel.Type
-	registry           ref.TypeRegistry
-	adapter            ref.TypeAdapter
-	provider           ref.TypeProvider
+	registry           *types.Registry
+	adapter            types.Adapter
+	provider           types.Provider
 	tagName            string
 	libraryName        string
 }
@@ -26,14 +27,14 @@ type Registry struct {
 type RegistryOption func(*Registry)
 
 // WithTypeAdapter sets the type adapter used to convert types to CEL types.
-func WithTypeAdapter(adapter ref.TypeAdapter) RegistryOption {
+func WithTypeAdapter(adapter types.Adapter) RegistryOption {
 	return func(r *Registry) {
 		r.adapter = adapter
 	}
 }
 
 // WithTypeProvider sets the type provider used to convert types to CEL types.
-func WithTypeProvider(provider ref.TypeProvider) RegistryOption {
+func WithTypeProvider(provider types.Provider) RegistryOption {
 	return func(r *Registry) {
 		r.provider = provider
 	}
@@ -107,14 +108,15 @@ func (r *Registry) FindIdent(identName string) (ref.Val, bool) {
 	return r.provider.FindIdent(identName)
 }
 
-// FindType looks up the Type given adapter qualified typeName.
-func (r *Registry) FindType(typeName string) (*exprpb.Type, bool) {
-	return r.provider.FindType(typeName)
+// FindStructType returns the Type give a qualified type name.
+func (r *Registry) FindStructType(structType string) (*types.Type, bool) {
+	return r.provider.FindStructType(structType)
 }
 
-// FindFieldType returns the field type for adapter checked type value.
-func (r *Registry) FindFieldType(messageType string, fieldName string) (*ref.FieldType, bool) {
-	return r.provider.FindFieldType(messageType, fieldName)
+// FindStructFieldType returns the field type for a checked type value. Returns
+// false if the field could not be found.
+func (r *Registry) FindStructFieldType(structType, fieldName string) (*types.FieldType, bool) {
+	return r.provider.FindStructFieldType(structType, fieldName)
 }
 
 // NewValue creates adapter new type value from adapter qualified name and map of field name to value.
@@ -128,14 +130,18 @@ func (r *Registry) ProgramOptions() []cel.ProgramOption {
 }
 
 // RegisterType registers adapter type with the registry.
-func (r *Registry) RegisterType(refTyes any) error {
-	switch v := refTyes.(type) {
+func (r *Registry) RegisterType(refTypes any) error {
+	switch v := refTypes.(type) {
 	case ref.Val:
+		err := r.registerTraits(v)
+		if err != nil {
+			return err
+		}
 		return r.registry.RegisterType(v.Type())
 	case ref.Type:
 		return r.registry.RegisterType(v)
 	}
-	return r.nativeTypeProvider.registerType(reflect.TypeOf(refTyes))
+	return r.nativeTypeProvider.registerType(reflect.TypeOf(refTypes))
 }
 
 // RegisterVariable registers adapter value with the registry.
@@ -165,6 +171,150 @@ func (r *Registry) RegisterMethod(name string, fun interface{}) error {
 // RegisterConversion registers adapter conversion function with the registry.
 func (r *Registry) RegisterConversion(fun any) error {
 	return r.nativeTypeProvider.registerConversionsFunc(fun)
+}
+
+func (r *Registry) registerTraits(v ref.Val) error {
+	typ := v.Type()
+
+	tv := getTypeValue(reflect.TypeOf(v))
+
+	if _, ok := v.(traits.Adder); ok && typ.HasTrait(traits.AdderType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		funcName := operators.Add
+		resultType := tv
+
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.AdderType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Subtractor); ok && typ.HasTrait(traits.SubtractorType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		funcName := operators.Subtract
+		resultType := tv
+
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.SubtractorType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Negater); ok && typ.HasTrait(traits.NegatorType) {
+		argsCelType := []*cel.Type{
+			tv,
+		}
+		funcName := operators.Negate
+		resultType := tv
+
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.NegatorType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Multiplier); ok && typ.HasTrait(traits.MultiplierType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		funcName := operators.Multiply
+		resultType := tv
+
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.MultiplierType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Divider); ok && typ.HasTrait(traits.DividerType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		funcName := operators.Divide
+		resultType := tv
+
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.DividerType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Modder); ok && typ.HasTrait(traits.ModderType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		funcName := operators.Modulo
+		resultType := tv
+
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.ModderType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Comparer); ok && typ.HasTrait(traits.ComparerType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		resultType := types.IntType
+
+		comparers := []string{
+			operators.Greater,
+			operators.GreaterEquals,
+			operators.Less,
+			operators.LessEquals,
+		}
+		for _, comparer := range comparers {
+			funcName := comparer
+			overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+			funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.ComparerType))
+			r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+		}
+	}
+
+	if _, ok := v.(traits.Indexer); ok && typ.HasTrait(traits.IndexerType) {
+		argsCelType := []*cel.Type{
+			tv,
+			types.DynType,
+		}
+		resultType := types.DynType
+
+		funcName := operators.Index
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.IndexerType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Sizer); ok && typ.HasTrait(traits.SizerType) {
+		argsCelType := []*cel.Type{
+			tv,
+		}
+		resultType := types.IntType
+
+		funcName := overloads.Size
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.SizerType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	if _, ok := v.(traits.Container); ok && typ.HasTrait(traits.ContainerType) {
+		argsCelType := []*cel.Type{
+			types.DynType,
+			tv,
+		}
+		resultType := types.BoolType
+
+		funcName := operators.In
+		overloadID := getOverloadID(funcName, argsCelType, resultType, false)
+		funcOpt := cel.Overload(overloadID, argsCelType, resultType, cel.OverloadOperandTrait(traits.ContainerType))
+		r.funcs[funcName] = append(r.funcs[funcName], funcOpt)
+	}
+
+	return nil
 }
 
 func (r *Registry) registerFunction(name string, fun interface{}, member bool) error {
@@ -202,31 +352,32 @@ func (r *Registry) registerFunction(name string, fun interface{}, member bool) e
 		return fmt.Errorf("invalid output type %s", out.String())
 	}
 
-	overloadID := formatFunction(name, argsReflectType, out, member)
+	overloadID := getOverloadID(name, argsCelType, resultType, member)
+	opts := []cel.OverloadOpt{overloadOpt}
 	var funcOpt cel.FunctionOpt
 	if member {
-		funcOpt = cel.MemberOverload(overloadID, argsCelType, resultType, overloadOpt)
+		funcOpt = cel.MemberOverload(overloadID, argsCelType, resultType, opts...)
 	} else {
-		funcOpt = cel.Overload(overloadID, argsCelType, resultType, overloadOpt)
+		funcOpt = cel.Overload(overloadID, argsCelType, resultType, opts...)
 	}
 	r.funcs[name] = append(r.funcs[name], funcOpt)
 	return nil
 }
 
-func formatFunction(name string, args []reflect.Type, resultType reflect.Type, member bool) string {
+func getOverloadID(name string, args []*cel.Type, resultType *cel.Type, member bool) string {
 	if member {
-		return fmt.Sprintf("%s_member@%s_%s", name, formatTypes(args), typeName(resultType))
+		return fmt.Sprintf("%s|member@|%s|%s", name, getTypesID(args), resultType.String())
 	}
-	return fmt.Sprintf("%s_@%s_%s", name, formatTypes(args), typeName(resultType))
+	return fmt.Sprintf("%s|@|%s|%s", name, getTypesID(args), resultType.String())
 }
 
-func formatTypes(types []reflect.Type) string {
+func getTypesID(types []*cel.Type) string {
 	if len(types) == 0 {
 		return ""
 	}
-	out := typeName(types[0])
+	out := types[0].String()
 	for _, typ := range types[1:] {
-		out += "_" + typeName(typ)
+		out += "," + typ.String()
 	}
 	return out
 }
@@ -352,23 +503,4 @@ func fieldNameWithTag(field reflect.StructField, tagName string) (name string, e
 		name = field.Name
 	}
 	return name, true
-}
-
-func getFieldValue(adapter ref.TypeAdapter, refField reflect.Value) any {
-	if refField.IsZero() {
-		switch refField.Kind() {
-		case reflect.Array, reflect.Slice:
-			return types.NewDynamicList(adapter, []ref.Val{})
-		case reflect.Map:
-			return types.NewDynamicMap(adapter, map[ref.Val]ref.Val{})
-		case reflect.Struct:
-			if refField.Type() == timestampType {
-				return types.Timestamp{Time: time.Unix(0, 0)}
-			}
-			return reflect.New(refField.Type()).Elem().Interface()
-		case reflect.Pointer:
-			return reflect.New(refField.Type().Elem()).Interface()
-		}
-	}
-	return refField.Interface()
 }

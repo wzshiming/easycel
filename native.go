@@ -5,22 +5,23 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/google/cel-go/checker/decls"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/google/cel-go/common/types/traits"
-	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
-var (
-	nativeObjTraitMask = traits.FieldTesterType | traits.IndexerType
-)
+// Type provider for native types.
+type Type interface {
+	ref.Val
+	ref.Type
+	TagName() string
+	GetRawType() reflect.Type
+}
 
-func newNativeTypeProvider(tagName string, adapter ref.TypeAdapter, provider ref.TypeProvider) *nativeTypeProvider {
+func newNativeTypeProvider(tagName string, adapter types.Adapter, provider types.Provider) *nativeTypeProvider {
 	return &nativeTypeProvider{
 		tagName:      tagName,
 		conversions:  make(map[reflect.Type]*convertType),
-		nativeTypes:  make(map[string]*nativeType),
+		nativeTypes:  make(map[string]Type),
 		baseAdapter:  adapter,
 		baseProvider: provider,
 	}
@@ -29,9 +30,9 @@ func newNativeTypeProvider(tagName string, adapter ref.TypeAdapter, provider ref
 type nativeTypeProvider struct {
 	tagName      string
 	conversions  map[reflect.Type]*convertType
-	nativeTypes  map[string]*nativeType
-	baseAdapter  ref.TypeAdapter
-	baseProvider ref.TypeProvider
+	nativeTypes  map[string]Type
+	baseAdapter  types.Adapter
+	baseProvider types.Provider
 }
 
 type convertType struct {
@@ -67,34 +68,55 @@ func (tp *nativeTypeProvider) registerConversionsFunc(fun interface{}) error {
 	return nil
 }
 
+func (tp *nativeTypeProvider) registerNativeType(tagName string, rawType reflect.Type) (t Type, err error) {
+	typeName := rawTypeName(rawType)
+	if _, ok := tp.nativeTypes[typeName]; ok {
+		return nil, fmt.Errorf("native type already registered: %v", typeName)
+	}
+
+	switch rawType.Kind() {
+	case reflect.Struct:
+		t, err = newStructType(tagName, rawType)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, fmt.Errorf("unsupported native type: %v", rawType)
+	}
+
+	tp.nativeTypes[typeName] = t
+	return t, nil
+}
+
 func (tp *nativeTypeProvider) registerType(refType any) error {
 	switch rt := refType.(type) {
 	case reflect.Type:
-		t, err := newNativeType(tp.tagName, rt)
+		rawType := rt
+		_, err := tp.registerNativeType(tp.tagName, rawType)
 		if err != nil {
 			return err
 		}
-		tp.nativeTypes[t.TypeName()] = t
 	case reflect.Value:
-		t, err := newNativeType(tp.tagName, rt.Type())
+		rawType := rt.Type()
+		_, err := tp.registerNativeType(tp.tagName, rawType)
 		if err != nil {
 			return err
 		}
-		tp.nativeTypes[t.TypeName()] = t
 	default:
 		return fmt.Errorf("unsupported native type: %v (%T) must be reflect.Type or reflect.Value", rt, rt)
 	}
 	return nil
 }
 
-// EnumValue proxies to the ref.TypeProvider configured at the times the NativeTypes
+// EnumValue proxies to the types.Provider configured at the times the NativeTypes
 // option was configured.
 func (tp *nativeTypeProvider) EnumValue(enumName string) ref.Val {
 	return tp.baseProvider.EnumValue(enumName)
 }
 
 // FindIdent looks up natives type instances by qualified identifier, and if not found
-// proxies to the composed ref.TypeProvider.
+// proxies to the composed types.Provider.
 func (tp *nativeTypeProvider) FindIdent(typeName string) (ref.Val, bool) {
 	if t, found := tp.nativeTypes[typeName]; found {
 		return t, true
@@ -102,23 +124,61 @@ func (tp *nativeTypeProvider) FindIdent(typeName string) (ref.Val, bool) {
 	return tp.baseProvider.FindIdent(typeName)
 }
 
-// FindType looks up CEL type-checker type definition by qualified identifier, and if not found
-// proxies to the composed ref.TypeProvider.
-func (tp *nativeTypeProvider) FindType(typeName string) (*exprpb.Type, bool) {
-	if _, found := tp.nativeTypes[typeName]; found {
-		return decls.NewTypeType(decls.NewObjectType(typeName)), true
+func (tp *nativeTypeProvider) findStructRawType(structType string) (reflect.Type, bool) {
+	t, found := tp.nativeTypes[structType]
+	if !found {
+		return nil, false
 	}
-	return tp.baseProvider.FindType(typeName)
+	rawType := t.GetRawType()
+
+	return tp.toTargetType(rawType), true
 }
 
-// FindFieldType looks up a native type's field definition, and if the type name is not a native
-// type then proxies to the composed ref.TypeProvider
-func (tp *nativeTypeProvider) FindFieldType(typeName, fieldName string) (*ref.FieldType, bool) {
-	t, found := tp.nativeTypes[typeName]
-	if !found {
-		return tp.baseProvider.FindFieldType(typeName, fieldName)
+func (tp *nativeTypeProvider) toTargetType(rawType reflect.Type) reflect.Type {
+	convertInfo, ok := tp.conversions[rawType]
+	if !ok {
+		return rawType
 	}
-	fieldMap := getStructFieldMap(t.refType, tp.tagName)
+	return convertInfo.targetType
+}
+
+func (tp *nativeTypeProvider) toTargetValue(rawType reflect.Type, val reflect.Value) ([]reflect.Value, bool) {
+	convertInfo, ok := tp.conversions[rawType]
+	if !ok {
+		return nil, false
+	}
+
+	// Convert the value using the conversion function.
+	convertArgs := []reflect.Value{val}
+	convertResult := convertInfo.convertFunc.Call(convertArgs)
+
+	return convertResult, true
+}
+
+// FindStructType returns the Type give a qualified type name.
+func (tp *nativeTypeProvider) FindStructType(structType string) (*types.Type, bool) {
+	rawType, found := tp.findStructRawType(structType)
+	if !found {
+		return tp.baseProvider.FindStructType(structType)
+	}
+	if !isSupportedFieldType(rawType) {
+		return nil, false
+	}
+	return getTypeValue(rawType), true
+}
+
+// FindStructFieldType returns the field type for a checked type value. Returns
+// false if the field could not be found.
+func (tp *nativeTypeProvider) FindStructFieldType(structType, fieldName string) (*types.FieldType, bool) {
+	rawType, found := tp.findStructRawType(structType)
+	if !found {
+		return tp.baseProvider.FindStructFieldType(structType, fieldName)
+	}
+	if !isSupportedFieldType(rawType) {
+		return nil, false
+	}
+
+	fieldMap := getStructFieldMap(rawType, tp.tagName)
 	if len(fieldMap) == 0 {
 		return nil, false
 	}
@@ -128,60 +188,74 @@ func (tp *nativeTypeProvider) FindFieldType(typeName, fieldName string) (*ref.Fi
 		return nil, false
 	}
 
-	refField, isDefined := t.hasField(fieldIndex)
-	if !found || !isDefined {
+	fieldRawType := rawType.Field(fieldIndex)
+	if !fieldRawType.IsExported() || !isSupportedType(fieldRawType.Type) {
 		return nil, false
 	}
-	convertInfo, ok := tp.conversions[refField.Type]
-	if ok {
-		exprType, ok := convertToExprType(convertInfo.targetType)
-		if !ok {
-			return nil, false
-		}
-		return &ref.FieldType{
-			Type: exprType,
-			IsSet: func(obj any) bool {
-				refVal := reflect.Indirect(reflect.ValueOf(obj))
-				refField := refVal.Field(fieldIndex)
-				return !refField.IsZero()
-			},
-			GetFrom: func(obj any) (any, error) {
-				refVal := reflect.Indirect(reflect.ValueOf(obj))
-				refField := refVal.Field(fieldIndex)
-				out := convertInfo.convertFunc.Call([]reflect.Value{refField})
-				return getFieldValue(tp, out[0]), nil
-			},
-		}, true
-	}
-	exprType, ok := convertToExprType(refField.Type)
-	if !ok {
-		return nil, false
-	}
-	return &ref.FieldType{
-		Type: exprType,
+
+	rawType = tp.toTargetType(fieldRawType.Type)
+	typ := getTypeValue(rawType)
+
+	ft := &types.FieldType{
+		Type: typ,
 		IsSet: func(obj any) bool {
 			refVal := reflect.Indirect(reflect.ValueOf(obj))
 			refField := refVal.Field(fieldIndex)
 			return !refField.IsZero()
 		},
-		GetFrom: func(obj any) (any, error) {
-			refVal := reflect.Indirect(reflect.ValueOf(obj))
-			refField := refVal.Field(fieldIndex)
-			return getFieldValue(tp, refField), nil
-		},
-	}, true
+	}
+
+	getFrom := func(obj any) (reflect.Value, error) {
+		if obj == nil {
+			return reflect.Value{}, fmt.Errorf("failed to get field value: object is nil")
+		}
+		rawValue := reflect.ValueOf(obj)
+		if rawValue.Kind() == reflect.Ptr {
+			if rawValue.IsNil() {
+				return reflect.Value{}, fmt.Errorf("failed to get field value: object is nil")
+			}
+			rawValue = rawValue.Elem()
+		}
+
+		refField := rawValue.Field(fieldIndex)
+		return refField, nil
+	}
+	if rawType == fieldRawType.Type {
+		ft.GetFrom = func(obj any) (any, error) {
+			refField, err := getFrom(obj)
+			if err != nil {
+				return nil, err
+			}
+			return refField.Interface(), nil
+		}
+	} else {
+		ft.GetFrom = func(obj any) (any, error) {
+			refField, err := getFrom(obj)
+			if err != nil {
+				return nil, err
+			}
+
+			data, ok := tp.toTargetValue(fieldRawType.Type, refField)
+			if !ok {
+				return nil, fmt.Errorf("failed to convert field value")
+			}
+			return data[0].Interface(), nil
+		}
+	}
+
+	return ft, true
 }
 
-// NewValue implements the ref.TypeProvider interface method.
+// NewValue implements the types.Provider interface method.
 func (tp *nativeTypeProvider) NewValue(typeName string, fields map[string]ref.Val) ref.Val {
 	t, found := tp.nativeTypes[typeName]
 	if !found {
 		return tp.baseProvider.NewValue(typeName, fields)
 	}
-	refPtr := reflect.New(t.refType)
+	refPtr := reflect.New(t.GetRawType())
 	refVal := refPtr.Elem()
 
-	fieldMap := getStructFieldMap(t.refType, tp.tagName)
+	fieldMap := getStructFieldMap(t.GetRawType(), tp.tagName)
 	if len(fieldMap) == 0 {
 		return tp.baseProvider.NewValue(typeName, fields)
 	}
@@ -191,8 +265,9 @@ func (tp *nativeTypeProvider) NewValue(typeName string, fields map[string]ref.Va
 		if !found {
 			return types.NewErr("no such field: %s", fieldName)
 		}
-		refFieldDef, isDefined := t.hasField(fieldIndex)
-		if !isDefined {
+
+		refFieldDef := t.GetRawType().Field(fieldIndex)
+		if !refFieldDef.IsExported() || !isSupportedType(refFieldDef.Type) {
 			return types.NewErr("no such field: %s", fieldName)
 		}
 		fieldVal, err := val.ConvertToNative(refFieldDef.Type)
@@ -217,18 +292,14 @@ func (tp *nativeTypeProvider) NativeToValue(val any) ref.Val {
 	}
 	rawVal := reflect.ValueOf(val)
 
-	convertInfo, ok := tp.conversions[rawVal.Type()]
+	out, ok := tp.toTargetValue(rawVal.Type(), rawVal)
 	if ok {
-		out := convertInfo.convertFunc.Call([]reflect.Value{rawVal})
 		return out[0].Interface().(ref.Val)
 	}
-	refVal := rawVal
-	if refVal.Kind() == reflect.Ptr {
-		refVal = reflect.Indirect(refVal)
-	}
+
 	// This isn't quite right if you're also supporting proto,
 	// but maybe an acceptable limitation.
-	switch refVal.Kind() {
+	switch rawVal.Kind() {
 	case reflect.Array, reflect.Slice:
 		switch val := val.(type) {
 		case []byte:
@@ -243,265 +314,14 @@ func (tp *nativeTypeProvider) NativeToValue(val any) ref.Val {
 		case time.Time:
 			return tp.baseAdapter.NativeToValue(val)
 		default:
-			return newNativeObject(tp, tp.tagName, val, rawVal)
+			return newStructObject(tp, tp.tagName, val, rawVal)
 		}
+	case reflect.Pointer:
+		if rawVal.IsNil() {
+			return types.NullValue
+		}
+		return tp.NativeToValue(rawVal.Elem().Interface())
 	default:
 		return tp.baseAdapter.NativeToValue(val)
 	}
-}
-
-func newNativeObject(adapter ref.TypeAdapter, tagName string, val any, refValue reflect.Value) ref.Val {
-	valType, err := newNativeType(tagName, refValue.Type())
-	if err != nil {
-		return types.WrapErr(err)
-	}
-	return &nativeObj{
-		TypeAdapter: adapter,
-		val:         val,
-		valType:     valType,
-		refValue:    refValue,
-	}
-}
-
-type nativeObj struct {
-	ref.TypeAdapter
-	val      any
-	valType  *nativeType
-	refValue reflect.Value
-}
-
-// ConvertToNative implements the ref.Val interface method.
-func (o *nativeObj) ConvertToNative(typeDesc reflect.Type) (any, error) {
-	if o.refValue.Type() == typeDesc {
-		return o.val, nil
-	}
-	if o.refValue.Kind() == reflect.Pointer && o.refValue.Type().Elem() == typeDesc {
-		return o.refValue.Elem().Interface(), nil
-	}
-	if typeDesc.Kind() == reflect.Pointer && o.refValue.Type() == typeDesc.Elem() {
-		ptr := reflect.New(typeDesc.Elem())
-		ptr.Elem().Set(o.refValue)
-		return ptr.Interface(), nil
-	}
-	return nil, fmt.Errorf("type conversion error from '%v' to '%v'", o.Type(), typeDesc)
-}
-
-// ConvertToType implements the ref.Val interface method.
-func (o *nativeObj) ConvertToType(typeVal ref.Type) ref.Val {
-	switch typeVal {
-	case types.TypeType:
-		return o.valType
-	default:
-		if typeVal.TypeName() == o.valType.typeName {
-			return o
-		}
-	}
-	return types.NewErr("type conversion error from '%s' to '%s'", o.Type(), typeVal)
-}
-
-// Equal implements the ref.Val interface method.
-func (o *nativeObj) Equal(other ref.Val) ref.Val {
-	otherNtv, ok := other.(*nativeObj)
-	if !ok {
-		return types.False
-	}
-	val := o.val
-	otherVal := otherNtv.val
-	refVal := o.refValue
-	otherRefVal := otherNtv.refValue
-	if refVal.Kind() != otherRefVal.Kind() {
-		if refVal.Kind() == reflect.Pointer {
-			val = refVal.Elem().Interface()
-		} else if otherRefVal.Kind() == reflect.Pointer {
-			otherVal = otherRefVal.Elem().Interface()
-		}
-	}
-	return types.Bool(reflect.DeepEqual(val, otherVal))
-}
-
-// IsZeroValue indicates whether the contained Golang value is a zero value.
-func (o *nativeObj) IsZeroValue() bool {
-	return reflect.Indirect(o.refValue).IsZero()
-}
-
-// IsSet tests whether a field which is defined is set to a non-default value.
-func (o *nativeObj) IsSet(field ref.Val) ref.Val {
-	refField, refErr := o.getReflectedField(field)
-	if refErr != nil {
-		return refErr
-	}
-	return types.Bool(!refField.IsZero())
-}
-
-// Get returns the value fo a field name.
-func (o *nativeObj) Get(field ref.Val) ref.Val {
-	refField, refErr := o.getReflectedField(field)
-	if refErr != nil {
-		return refErr
-	}
-	return adaptFieldValue(o, refField)
-}
-
-func (o *nativeObj) getReflectedField(field ref.Val) (reflect.Value, ref.Val) {
-	fieldName, ok := field.(types.String)
-	if !ok {
-		return reflect.Value{}, types.MaybeNoSuchOverloadErr(field)
-	}
-	fieldMap := getStructFieldMap(o.refValue.Type(), o.valType.tagName)
-	if len(fieldMap) == 0 {
-		return reflect.Value{}, types.NewErr("no such field: %s", fieldName)
-	}
-
-	fieldNameStr, found := fieldMap[string(fieldName)]
-	if !found {
-		return reflect.Value{}, types.NewErr("no such field: %s", fieldName)
-	}
-
-	refField, isDefined := o.valType.hasField(fieldNameStr)
-	if !isDefined {
-		return reflect.Value{}, types.NewErr("no such field: %s", fieldName)
-	}
-	refVal := reflect.Indirect(o.refValue)
-	return refVal.FieldByIndex(refField.Index), nil
-}
-
-// Type implements the ref.Val interface method.
-func (o *nativeObj) Type() ref.Type {
-	return o.valType
-}
-
-// Value implements the ref.Val interface method.
-func (o *nativeObj) Value() any {
-	return o.val
-}
-
-func newNativeType(tagName string, rawType reflect.Type) (*nativeType, error) {
-	refType := rawType
-	if refType.Kind() == reflect.Pointer {
-		refType = refType.Elem()
-	}
-	if !isValidObjectType(refType) {
-		return nil, fmt.Errorf("unsupported reflect.Type %v, must be reflect.Struct", rawType)
-	}
-	return &nativeType{
-		tagName:  tagName,
-		typeName: typeName(refType),
-		refType:  refType,
-	}, nil
-}
-
-type nativeType struct {
-	tagName  string
-	typeName string
-	refType  reflect.Type
-}
-
-// ConvertToNative implements ref.Val.ConvertToNative.
-func (t *nativeType) ConvertToNative(typeDesc reflect.Type) (any, error) {
-	return nil, fmt.Errorf("type conversion error for type to '%v'", typeDesc)
-}
-
-// ConvertToType implements ref.Val.ConvertToType.
-func (t *nativeType) ConvertToType(typeVal ref.Type) ref.Val {
-	switch typeVal {
-	case types.TypeType:
-		return types.TypeType
-	}
-	return types.NewErr("type conversion error from '%s' to '%s'", types.TypeType, typeVal)
-}
-
-// Equal returns true of both type names are equal to each other.
-func (t *nativeType) Equal(other ref.Val) ref.Val {
-	otherType, ok := other.(ref.Type)
-	return types.Bool(ok && t.TypeName() == otherType.TypeName())
-}
-
-// HasTrait implements the ref.Type interface method.
-func (t *nativeType) HasTrait(trait int) bool {
-	return nativeObjTraitMask&trait == trait
-}
-
-// String implements the strings.Stringer interface method.
-func (t *nativeType) String() string {
-	return t.typeName
-}
-
-// Type implements the ref.Val interface method.
-func (t *nativeType) Type() ref.Type {
-	return types.TypeType
-}
-
-// TypeName implements the ref.Type interface method.
-func (t *nativeType) TypeName() string {
-	return t.typeName
-}
-
-// Value implements the ref.Val interface method.
-func (t *nativeType) Value() any {
-	return t.typeName
-}
-
-// hasField returns whether a field name has a corresponding Golang reflect.StructField
-func (t *nativeType) hasField(fieldIndex int) (reflect.StructField, bool) {
-	f := t.refType.Field(fieldIndex)
-	if !f.IsExported() || !isSupportedType(f.Type) {
-		return reflect.StructField{}, false
-	}
-	return f, true
-}
-
-func adaptFieldValue(adapter ref.TypeAdapter, refField reflect.Value) ref.Val {
-	return adapter.NativeToValue(getFieldValue(adapter, refField))
-}
-
-func isValidObjectType(refType reflect.Type) bool {
-	return refType.Kind() == reflect.Struct
-}
-
-func isSupportedType(refType reflect.Type) bool {
-	switch refType.Kind() {
-	case reflect.Chan, reflect.Complex64, reflect.Complex128, reflect.Func, reflect.UnsafePointer, reflect.Uintptr:
-		return false
-	case reflect.Array, reflect.Slice:
-		return isSupportedType(refType.Elem())
-	case reflect.Map:
-		return isSupportedType(refType.Key()) && isSupportedType(refType.Elem())
-	}
-	return true
-}
-
-var structFieldMap = map[string]map[reflect.Type]map[string]int{}
-
-func getStructFieldMap(typ reflect.Type, tagName string) map[string]int {
-	if filedMap, ok := structFieldMap[tagName]; ok {
-		if entries, ok := filedMap[typ]; ok {
-			return entries
-		}
-	}
-	entries := map[string]int{}
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-
-		name := ""
-		if tagName == "" {
-			name = field.Name
-		} else {
-			var ok bool
-			name, ok = fieldNameWithTag(field, tagName)
-			if !ok {
-				continue
-			}
-		}
-		entries[name] = i
-	}
-
-	if _, ok := structFieldMap[tagName]; !ok {
-		structFieldMap[tagName] = map[reflect.Type]map[string]int{}
-	}
-
-	structFieldMap[tagName][typ] = entries
-	return entries
 }

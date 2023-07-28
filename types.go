@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
@@ -34,16 +35,50 @@ var (
 	refValType            = reflect.TypeOf((*ref.Val)(nil)).Elem()
 )
 
-var typeValueMap = map[reflect.Type]*types.TypeValue{}
+var typeValueMap = map[reflect.Type]*types.Type{}
 
-func getTypeValue(typ reflect.Type) *types.TypeValue {
-	if refType, ok := typeValueMap[typ]; ok {
-		return refType
+func getTypeValue(rawType reflect.Type) (typ *types.Type) {
+	typ, ok := typeValueMap[rawType]
+	if ok {
+		return typ
 	}
 
-	refType := types.NewTypeValue(typeName(typ), getTrait(typ))
-	typeValueMap[typ] = refType
-	return refType
+	switch rawType.Kind() {
+	case reflect.Struct:
+		typ = cel.ObjectType(rawTypeName(rawType), getTrait(rawType))
+	case reflect.Bool:
+		typ = cel.BoolType
+	case reflect.Float32, reflect.Float64:
+		typ = cel.DoubleType
+	case reflect.Int64:
+		if rawType == durationType || rawType == typesDurationType {
+			typ = cel.DurationType
+		} else {
+			typ = cel.IntType
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
+		typ = cel.IntType
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		typ = cel.UintType
+	case reflect.String:
+		typ = cel.StringType
+	case reflect.Slice:
+		rawElem := rawType.Elem()
+		if rawElem == byteType {
+			typ = cel.BytesType
+		} else {
+			typ = cel.ListType(getTypeValue(rawElem))
+		}
+	case reflect.Array:
+		typ = cel.ListType(getTypeValue(rawType.Elem()))
+	case reflect.Map:
+		typ = cel.MapType(getTypeValue(rawType.Key()), getTypeValue(rawType.Elem()))
+	case reflect.Ptr:
+		typ = cel.NullableType(getTypeValue(rawType.Elem()))
+	}
+
+	typeValueMap[rawType] = typ
+	return typ
 }
 
 var typeTraitMap = map[reflect.Type]int{}
@@ -103,6 +138,12 @@ func getTrait(typ reflect.Type) int {
 	return trait
 }
 
-func typeName(typ reflect.Type) string {
-	return typ.String()
+func rawTypeName(rawType reflect.Type) string {
+	switch rawType {
+	case typesTimestampType, timestampType:
+		return "google.protobuf.Timestamp"
+	case typesDurationType, durationType:
+		return "google.protobuf.Duration"
+	}
+	return rawType.String()
 }

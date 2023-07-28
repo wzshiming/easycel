@@ -3,7 +3,7 @@ module github.com/wzshiming/easycel
 go 1.20
 
 require (
-	github.com/google/cel-go v0.15.2
+	github.com/google/cel-go v0.17.1
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 )
 
