@@ -89,24 +89,17 @@ func (tp *nativeTypeProvider) registerNativeType(tagName string, rawType reflect
 	return t, nil
 }
 
-func (tp *nativeTypeProvider) registerType(refType any) error {
+func (tp *nativeTypeProvider) registerType(refType any) (Type, error) {
 	switch rt := refType.(type) {
 	case reflect.Type:
 		rawType := rt
-		_, err := tp.registerNativeType(tp.tagName, rawType)
-		if err != nil {
-			return err
-		}
+		return tp.registerNativeType(tp.tagName, rawType)
 	case reflect.Value:
 		rawType := rt.Type()
-		_, err := tp.registerNativeType(tp.tagName, rawType)
-		if err != nil {
-			return err
-		}
+		return tp.registerNativeType(tp.tagName, rawType)
 	default:
-		return fmt.Errorf("unsupported native type: %v (%T) must be reflect.Type or reflect.Value", rt, rt)
+		return nil, fmt.Errorf("unsupported native type: %v (%T) must be reflect.Type or reflect.Value", rt, rt)
 	}
-	return nil
 }
 
 // EnumValue proxies to the types.Provider configured at the times the NativeTypes
@@ -164,7 +157,13 @@ func (tp *nativeTypeProvider) FindStructType(structType string) (*types.Type, bo
 	if !isSupportedFieldType(rawType) {
 		return nil, false
 	}
-	return getTypeValue(rawType), true
+
+	_, found = tp.nativeTypes[structType]
+	if !found {
+		return tp.baseProvider.FindStructType(structType)
+	}
+
+	return types.NewTypeTypeWithParam(getTypeValue(rawType)), true
 }
 
 // FindStructFieldType returns the field type for a checked type value. Returns
@@ -305,10 +304,10 @@ func (tp *nativeTypeProvider) NativeToValue(val any) ref.Val {
 		case []byte:
 			return tp.baseAdapter.NativeToValue(val)
 		default:
-			return types.NewDynamicList(tp, val)
+			return newListObject(tp, val)
 		}
 	case reflect.Map:
-		return types.NewDynamicMap(tp, val)
+		return newMapObject(tp, val)
 	case reflect.Struct:
 		switch val := val.(type) {
 		case time.Time:

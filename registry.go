@@ -140,8 +140,10 @@ func (r *Registry) RegisterType(refTypes any) error {
 		return r.registry.RegisterType(v.Type())
 	case ref.Type:
 		return r.registry.RegisterType(v)
+	default:
+		_, err := r.nativeTypeProvider.registerType(reflect.TypeOf(refTypes))
+		return err
 	}
-	return r.nativeTypeProvider.registerType(reflect.TypeOf(refTypes))
 }
 
 // RegisterVariable registers adapter value with the registry.
@@ -397,22 +399,24 @@ func (r *Registry) getOverloadOpt(typ reflect.Type, funVal reflect.Value) (out c
 	}
 
 	numIn := typ.NumIn()
-	isRefVal := make([]bool, numIn)
-	isPtr := make([]bool, numIn)
+	rawTypes := make([]reflect.Type, numIn)
 	if numIn > 0 {
 		for i := 0; i < numIn; i++ {
 			in := typ.In(i)
-			isRefVal[i] = in.Implements(refValType)
-			isPtr[i] = in.Kind() == reflect.Ptr
+			rawTypes[i] = in
 		}
 	}
 
 	switch numIn {
 	case 1:
 		return cel.UnaryBinding(func(value ref.Val) ref.Val {
+			v, err := value.ConvertToNative(rawTypes[0])
+			if err != nil {
+				return types.WrapErr(err)
+			}
 			val, err := reflectFuncCall(funVal,
 				[]reflect.Value{
-					convertToReflectValue(value, isRefVal[0], isPtr[0]),
+					reflect.ValueOf(v),
 				},
 			)
 			if err != nil {
@@ -422,10 +426,18 @@ func (r *Registry) getOverloadOpt(typ reflect.Type, funVal reflect.Value) (out c
 		}), nil
 	case 2:
 		return cel.BinaryBinding(func(lhs ref.Val, rhs ref.Val) ref.Val {
+			lhv, err := lhs.ConvertToNative(rawTypes[0])
+			if err != nil {
+				return types.WrapErr(err)
+			}
+			rhv, err := rhs.ConvertToNative(rawTypes[1])
+			if err != nil {
+				return types.WrapErr(err)
+			}
 			val, err := reflectFuncCall(funVal,
 				[]reflect.Value{
-					convertToReflectValue(lhs, isRefVal[0], isPtr[0]),
-					convertToReflectValue(rhs, isRefVal[1], isPtr[1]),
+					reflect.ValueOf(lhv),
+					reflect.ValueOf(rhv),
 				},
 			)
 			if err != nil {
@@ -445,8 +457,12 @@ func (r *Registry) getOverloadOpt(typ reflect.Type, funVal reflect.Value) (out c
 		return cel.FunctionBinding(func(values ...ref.Val) ref.Val {
 			vals := make([]reflect.Value, 0, len(values))
 			for i, value := range values {
+				val, err := value.ConvertToNative(rawTypes[i])
+				if err != nil {
+					return types.WrapErr(err)
+				}
 				vals = append(vals,
-					convertToReflectValue(value, isRefVal[i], isPtr[i]),
+					reflect.ValueOf(val),
 				)
 			}
 			val, err := reflectFuncCall(funVal, vals)
@@ -456,25 +472,6 @@ func (r *Registry) getOverloadOpt(typ reflect.Type, funVal reflect.Value) (out c
 			return r.NativeToValue(val.Interface())
 		}), nil
 	}
-}
-
-func convertToReflectValue(val ref.Val, isRefVal, isPtr bool) reflect.Value {
-	var value reflect.Value
-	if isRefVal {
-		value = reflect.ValueOf(val)
-	} else {
-		value = reflect.ValueOf(val.Value())
-		if isPtr {
-			if value.Kind() != reflect.Ptr {
-				value = value.Addr()
-			}
-		} else {
-			if value.Kind() == reflect.Ptr {
-				value = value.Elem()
-			}
-		}
-	}
-	return value
 }
 
 func reflectFuncCall(funVal reflect.Value, values []reflect.Value) (reflect.Value, error) {

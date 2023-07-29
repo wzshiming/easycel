@@ -181,6 +181,39 @@ func TestAll(t *testing.T) {
 			src: "sayHi('CEL')",
 			funcs: map[string][]any{
 				"sayHi": {
+					func(s string) types.String {
+						return "hello " + types.String(s)
+					},
+				},
+			},
+			want: types.String("hello CEL"),
+		},
+		{
+			src: "sayHi('CEL')",
+			funcs: map[string][]any{
+				"sayHi": {
+					func(s string) string {
+						return "hello " + s
+					},
+				},
+			},
+			want: types.String("hello CEL"),
+		},
+		{
+			src: "sayHi('CEL')",
+			funcs: map[string][]any{
+				"sayHi": {
+					func(s *string) types.String {
+						return "hello " + types.String(*s)
+					},
+				},
+			},
+			want: types.String("hello CEL"),
+		},
+		{
+			src: "sayHi('CEL')",
+			funcs: map[string][]any{
+				"sayHi": {
 					func(s types.String) (types.String, error) {
 						return "hello " + s, nil
 					},
@@ -558,6 +591,39 @@ func TestAll(t *testing.T) {
 			},
 			types: []any{Slice{}},
 			want:  types.String("foo"),
+		},
+		{
+			src:   `easycel_test.Message{ message: "hello" }`,
+			types: []any{Message{}},
+			want:  Message{Message: "hello"},
+		},
+		{
+			src:   `easycel_test.Message{ message: "hello" }.message`,
+			types: []any{Message{}},
+			want:  types.String("hello"),
+		},
+		// TODO
+		//{
+		//	src:   `easycel_test.Message{ message: "hello" }["message"]`,
+		//	types: []any{Message{}},
+		//	want:  types.String("hello"),
+		//},
+		{
+			src:   `{ "message": "hello" }`,
+			types: []any{Message{}},
+			want: map[ref.Val]ref.Val{
+				types.String("message"): types.String("hello"),
+			},
+		},
+		{
+			src:   `{ "message": "hello" }.message`,
+			types: []any{Message{}},
+			want:  types.String("hello"),
+		},
+		{
+			src:   `{ "message": "hello" }["message"]`,
+			types: []any{Message{}},
+			want:  types.String("hello"),
 		},
 	}
 	for _, tt := range tests {
