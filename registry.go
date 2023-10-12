@@ -13,6 +13,11 @@ import (
 	"github.com/google/cel-go/common/types/traits"
 )
 
+var (
+	_ types.Provider = (*Registry)(nil)
+	_ types.Adapter  = (*Registry)(nil)
+)
+
 type Registry struct {
 	nativeTypeProvider *nativeTypeProvider
 	funcs              map[string][]cel.FunctionOpt
@@ -111,6 +116,12 @@ func (r *Registry) FindIdent(identName string) (ref.Val, bool) {
 // FindStructType returns the Type give a qualified type name.
 func (r *Registry) FindStructType(structType string) (*types.Type, bool) {
 	return r.provider.FindStructType(structType)
+}
+
+// FindStructFieldNames returns thet field names associated with the type, if the type
+// is found.
+func (r *Registry) FindStructFieldNames(structType string) ([]string, bool) {
+	return r.provider.FindStructFieldNames(structType)
 }
 
 // FindStructFieldType returns the field type for a checked type value. Returns

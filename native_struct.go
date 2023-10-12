@@ -118,6 +118,42 @@ func getStructFieldMap(typ reflect.Type, tagName string) map[string]int {
 	return entries
 }
 
+var structFields = map[string]map[reflect.Type][]string{}
+
+func getStructFields(typ reflect.Type, tagName string) []string {
+	if fields, ok := structFields[tagName]; ok {
+		if entries, ok := fields[typ]; ok {
+			return entries
+		}
+	}
+	entries := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		name := ""
+		if tagName == "" {
+			name = field.Name
+		} else {
+			var ok bool
+			name, ok = fieldNameWithTag(field, tagName)
+			if !ok {
+				continue
+			}
+		}
+		entries = append(entries, name)
+	}
+
+	if _, ok := structFields[tagName]; !ok {
+		structFields[tagName] = map[reflect.Type][]string{}
+	}
+
+	structFields[tagName][typ] = entries
+	return entries
+}
+
 func isSupportedFieldType(refType reflect.Type) bool {
 	switch refType.Kind() {
 	case reflect.Ptr:

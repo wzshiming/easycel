@@ -27,6 +27,8 @@ func newNativeTypeProvider(tagName string, adapter types.Adapter, provider types
 	}
 }
 
+var _ types.Provider = (*nativeTypeProvider)(nil)
+
 type nativeTypeProvider struct {
 	tagName      string
 	conversions  map[reflect.Type]*convertType
@@ -164,6 +166,21 @@ func (tp *nativeTypeProvider) FindStructType(structType string) (*types.Type, bo
 	}
 
 	return types.NewTypeTypeWithParam(getTypeValue(rawType)), true
+}
+
+// FindStructFieldNames returns thet field names associated with the type, if the type
+// is found.
+func (tp *nativeTypeProvider) FindStructFieldNames(structType string) ([]string, bool) {
+	rawType, found := tp.findStructRawType(structType)
+	if !found {
+		return nil, false
+	}
+	if !isSupportedFieldType(rawType) {
+		return nil, false
+	}
+
+	fields := getStructFields(rawType, tp.tagName)
+	return fields, true
 }
 
 // FindStructFieldType returns the field type for a checked type value. Returns
