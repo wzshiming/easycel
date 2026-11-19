@@ -2,6 +2,7 @@ package easycel
 
 import (
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -35,10 +36,30 @@ var (
 	refValType            = reflect.TypeOf((*ref.Val)(nil)).Elem()
 )
 
-var typeValueMap = map[reflect.Type]*types.Type{}
+// cache is a typed wrapper over sync.Map.
+type cache[K comparable, V any] struct {
+	m sync.Map
+}
+
+func (c *cache[K, V]) load(key K) (V, bool) {
+	v, ok := c.m.Load(key)
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	return v.(V), true
+}
+
+// store keeps the first value stored for the key and returns it.
+func (c *cache[K, V]) store(key K, val V) V {
+	actual, _ := c.m.LoadOrStore(key, val)
+	return actual.(V)
+}
+
+var typeValueMap cache[reflect.Type, *types.Type]
 
 func getTypeValue(rawType reflect.Type) (typ *types.Type) {
-	typ, ok := typeValueMap[rawType]
+	typ, ok := typeValueMap.load(rawType)
 	if ok {
 		return typ
 	}
@@ -77,14 +98,13 @@ func getTypeValue(rawType reflect.Type) (typ *types.Type) {
 		typ = cel.NullableType(getTypeValue(rawType.Elem()))
 	}
 
-	typeValueMap[rawType] = typ
-	return typ
+	return typeValueMap.store(rawType, typ)
 }
 
-var typeTraitMap = map[reflect.Type]int{}
+var typeTraitMap cache[reflect.Type, int]
 
 func getTrait(typ reflect.Type) int {
-	trait, ok := typeTraitMap[typ]
+	trait, ok := typeTraitMap.load(typ)
 	if ok {
 		return trait
 	}
@@ -134,8 +154,7 @@ func getTrait(typ reflect.Type) int {
 	if typ.Implements(traitsSubtractorType) {
 		trait |= traits.SubtractorType
 	}
-	typeTraitMap[typ] = trait
-	return trait
+	return typeTraitMap.store(typ, trait)
 }
 
 func rawTypeName(rawType reflect.Type) string {
