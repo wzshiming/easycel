@@ -18,6 +18,7 @@ var (
 	_ types.Adapter  = (*Registry)(nil)
 )
 
+// Registry is a cel.Library that makes Go types, variables and functions available to CEL.
 type Registry struct {
 	nativeTypeProvider *nativeTypeProvider
 	funcs              map[string][]cel.FunctionOpt
@@ -29,6 +30,7 @@ type Registry struct {
 	libraryName        string
 }
 
+// RegistryOption configures a Registry created by NewRegistry.
 type RegistryOption func(*Registry)
 
 // WithTypeAdapter sets the type adapter used to convert types to CEL types.
@@ -52,7 +54,7 @@ func WithTagName(tagName string) RegistryOption {
 	}
 }
 
-// NewRegistry creates adapter new Registry.
+// NewRegistry creates a new Registry.
 func NewRegistry(libraryName string, opts ...RegistryOption) *Registry {
 	r := &Registry{
 		funcs:       make(map[string][]cel.FunctionOpt),
@@ -98,7 +100,7 @@ func (r *Registry) CompileOptions() []cel.EnvOption {
 	return opts
 }
 
-// NativeToValue converts the input `value` to adapter CEL `ref.Val`.
+// NativeToValue converts the input `value` to a CEL `ref.Val`.
 func (r *Registry) NativeToValue(value any) ref.Val {
 	return r.adapter.NativeToValue(value)
 }
@@ -108,7 +110,7 @@ func (r *Registry) EnumValue(enumName string) ref.Val {
 	return r.provider.EnumValue(enumName)
 }
 
-// FindIdent takes adapter qualified identifier name and returns adapter Value if one exists.
+// FindIdent takes a qualified identifier name and returns a Value if one exists.
 func (r *Registry) FindIdent(identName string) (ref.Val, bool) {
 	return r.provider.FindIdent(identName)
 }
@@ -118,8 +120,7 @@ func (r *Registry) FindStructType(structType string) (*types.Type, bool) {
 	return r.provider.FindStructType(structType)
 }
 
-// FindStructFieldNames returns thet field names associated with the type, if the type
-// is found.
+// FindStructFieldNames returns the field names associated with the type, if the type is found.
 func (r *Registry) FindStructFieldNames(structType string) ([]string, bool) {
 	return r.provider.FindStructFieldNames(structType)
 }
@@ -130,7 +131,7 @@ func (r *Registry) FindStructFieldType(structType, fieldName string) (*types.Fie
 	return r.provider.FindStructFieldType(structType, fieldName)
 }
 
-// NewValue creates adapter new type value from adapter qualified name and map of field name to value.
+// NewValue creates a new type value from a qualified name and map of field name to value.
 func (r *Registry) NewValue(typeName string, fields map[string]ref.Val) ref.Val {
 	return r.provider.NewValue(typeName, fields)
 }
@@ -140,7 +141,7 @@ func (r *Registry) ProgramOptions() []cel.ProgramOption {
 	return []cel.ProgramOption{}
 }
 
-// RegisterType registers adapter type with the registry.
+// RegisterType registers a type with the registry.
 func (r *Registry) RegisterType(refTypes any) error {
 	switch v := refTypes.(type) {
 	case ref.Val:
@@ -157,7 +158,7 @@ func (r *Registry) RegisterType(refTypes any) error {
 	}
 }
 
-// RegisterVariable registers adapter value with the registry.
+// RegisterVariable registers a value with the registry.
 func (r *Registry) RegisterVariable(name string, val interface{}) error {
 	if _, ok := r.variables[name]; ok {
 		return fmt.Errorf("variable %s already registered", name)
@@ -171,17 +172,17 @@ func (r *Registry) RegisterVariable(name string, val interface{}) error {
 	return nil
 }
 
-// RegisterFunction registers adapter function with the registry.
+// RegisterFunction registers a function with the registry.
 func (r *Registry) RegisterFunction(name string, fun interface{}) error {
 	return r.registerFunction(name, fun, false)
 }
 
-// RegisterMethod registers adapter method with the registry.
+// RegisterMethod registers a method with the registry.
 func (r *Registry) RegisterMethod(name string, fun interface{}) error {
 	return r.registerFunction(name, fun, true)
 }
 
-// RegisterConversion registers adapter conversion function with the registry.
+// RegisterConversion registers a conversion function with the registry.
 func (r *Registry) RegisterConversion(fun any) error {
 	return r.nativeTypeProvider.registerConversionsFunc(fun)
 }

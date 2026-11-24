@@ -9,7 +9,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 )
 
-// Type provider for native types.
+// Type is a CEL type backed by a native Go type.
 type Type interface {
 	ref.Val
 	ref.Type
@@ -168,8 +168,7 @@ func (tp *nativeTypeProvider) FindStructType(structType string) (*types.Type, bo
 	return types.NewTypeTypeWithParam(getTypeValue(rawType)), true
 }
 
-// FindStructFieldNames returns thet field names associated with the type, if the type
-// is found.
+// FindStructFieldNames returns the field names associated with the type, if the type is found.
 func (tp *nativeTypeProvider) FindStructFieldNames(structType string) ([]string, bool) {
 	rawType, found := tp.findStructRawType(structType)
 	if !found {
