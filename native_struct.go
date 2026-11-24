@@ -162,13 +162,6 @@ func isSupportedFieldType(refType reflect.Type) bool {
 }
 
 func isSupportedType(refType reflect.Type) bool {
-	switch refType.Kind() {
-	case reflect.Chan, reflect.Complex64, reflect.Complex128, reflect.Func, reflect.UnsafePointer, reflect.Uintptr:
-		return false
-	case reflect.Array, reflect.Slice:
-		return isSupportedType(refType.Elem())
-	case reflect.Map:
-		return isSupportedType(refType.Key()) && isSupportedType(refType.Elem())
-	}
-	return true
+	_, ok := convertToCelType(refType)
+	return ok
 }

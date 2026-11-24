@@ -165,7 +165,8 @@ func (tp *nativeTypeProvider) FindStructType(structType string) (*types.Type, bo
 		return tp.baseProvider.FindStructType(structType)
 	}
 
-	return types.NewTypeTypeWithParam(getTypeValue(rawType)), true
+	typ, ok := convertToCelType(rawType)
+	return types.NewTypeTypeWithParam(typ), ok
 }
 
 // FindStructFieldNames returns thet field names associated with the type, if the type
@@ -210,7 +211,10 @@ func (tp *nativeTypeProvider) FindStructFieldType(structType, fieldName string) 
 	}
 
 	rawType = tp.toTargetType(fieldRawType.Type)
-	typ := getTypeValue(rawType)
+	typ, ok := convertToCelType(rawType)
+	if !ok {
+		return nil, false
+	}
 
 	ft := &types.FieldType{
 		Type: typ,
@@ -317,12 +321,10 @@ func (tp *nativeTypeProvider) NativeToValue(val any) ref.Val {
 	// but maybe an acceptable limitation.
 	switch rawVal.Kind() {
 	case reflect.Array, reflect.Slice:
-		switch val := val.(type) {
-		case []byte:
-			return tp.baseAdapter.NativeToValue(val)
-		default:
-			return newListObject(tp, val)
+		if rawVal.Kind() == reflect.Slice && rawVal.Type().Elem() == byteType {
+			return tp.baseAdapter.NativeToValue(rawVal.Bytes())
 		}
+		return newListObject(tp, val)
 	case reflect.Map:
 		return newMapObject(tp, val)
 	case reflect.Struct:

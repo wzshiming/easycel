@@ -189,7 +189,7 @@ func (r *Registry) RegisterConversion(fun any) error {
 func (r *Registry) registerTraits(v ref.Val) error {
 	typ := v.Type()
 
-	tv := getTypeValue(reflect.TypeOf(v))
+	tv, _ := convertToCelType(reflect.TypeOf(v))
 
 	if _, ok := v.(traits.Adder); ok && typ.HasTrait(traits.AdderType) {
 		argsCelType := []*cel.Type{
