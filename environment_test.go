@@ -112,7 +112,7 @@ func TestAll(t *testing.T) {
 			types: []any{Message{}, Meta{}},
 			conversions: []any{
 				func(t Timestamp) types.Timestamp {
-					return types.Timestamp{t.Time}
+					return types.Timestamp{Time: t.Time}
 				},
 			},
 			vars: map[string]any{
@@ -127,7 +127,7 @@ func TestAll(t *testing.T) {
 			types: []any{Message{}, Meta{}},
 			conversions: []any{
 				func(t Timestamp) types.Timestamp {
-					return types.Timestamp{t.Time}
+					return types.Timestamp{Time: t.Time}
 				},
 			},
 			methods: map[string][]any{
@@ -149,7 +149,7 @@ func TestAll(t *testing.T) {
 			types: []any{Message{}, Meta{}, Timestamp{}},
 			conversions: []any{
 				func(t Timestamp) types.Timestamp {
-					return types.Timestamp{t.Time}
+					return types.Timestamp{Time: t.Time}
 				},
 			},
 			funcs: map[string][]any{
