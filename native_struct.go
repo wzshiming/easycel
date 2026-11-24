@@ -82,15 +82,20 @@ func (o *structObject) Value() any {
 	return o.val
 }
 
-var structFieldMap = map[string]map[reflect.Type]map[string]int{}
+type structKey struct {
+	typ     reflect.Type
+	tagName string
+}
+
+var structFieldMap cache[structKey, map[string]int]
 
 func getStructFieldMap(typ reflect.Type, tagName string) map[string]int {
-	if filedMap, ok := structFieldMap[tagName]; ok {
-		if entries, ok := filedMap[typ]; ok {
-			return entries
-		}
+	key := structKey{typ: typ, tagName: tagName}
+	entries, ok := structFieldMap.load(key)
+	if ok {
+		return entries
 	}
-	entries := map[string]int{}
+	entries = map[string]int{}
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 		if !field.IsExported() {
@@ -110,23 +115,18 @@ func getStructFieldMap(typ reflect.Type, tagName string) map[string]int {
 		entries[name] = i
 	}
 
-	if _, ok := structFieldMap[tagName]; !ok {
-		structFieldMap[tagName] = map[reflect.Type]map[string]int{}
-	}
-
-	structFieldMap[tagName][typ] = entries
-	return entries
+	return structFieldMap.store(key, entries)
 }
 
-var structFields = map[string]map[reflect.Type][]string{}
+var structFields cache[structKey, []string]
 
 func getStructFields(typ reflect.Type, tagName string) []string {
-	if fields, ok := structFields[tagName]; ok {
-		if entries, ok := fields[typ]; ok {
-			return entries
-		}
+	key := structKey{typ: typ, tagName: tagName}
+	entries, ok := structFields.load(key)
+	if ok {
+		return entries
 	}
-	entries := make([]string, 0, typ.NumField())
+	entries = make([]string, 0, typ.NumField())
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 		if !field.IsExported() {
@@ -146,12 +146,7 @@ func getStructFields(typ reflect.Type, tagName string) []string {
 		entries = append(entries, name)
 	}
 
-	if _, ok := structFields[tagName]; !ok {
-		structFields[tagName] = map[reflect.Type][]string{}
-	}
-
-	structFields[tagName][typ] = entries
-	return entries
+	return structFields.store(key, entries)
 }
 
 func isSupportedFieldType(refType reflect.Type) bool {
