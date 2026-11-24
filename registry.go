@@ -163,6 +163,9 @@ func (r *Registry) RegisterVariable(name string, val interface{}) error {
 		return fmt.Errorf("variable %s already registered", name)
 	}
 	typ := reflect.TypeOf(val)
+	if typ == nil {
+		return fmt.Errorf("variable %s must not be nil", name)
+	}
 	celType, ok := convertToCelType(typ)
 	if !ok {
 		return fmt.Errorf("variable %s type %s not supported", name, typ.String())
@@ -348,7 +351,6 @@ func (r *Registry) registerFunction(name string, fun interface{}, member bool) e
 		}
 	}
 	argsCelType := make([]*cel.Type, 0, numIn)
-	argsReflectType := make([]reflect.Type, 0, numIn)
 	for i := 0; i < numIn; i++ {
 		in := typ.In(i)
 		celType, ok := convertToCelType(in)
@@ -356,7 +358,6 @@ func (r *Registry) registerFunction(name string, fun interface{}, member bool) e
 			return fmt.Errorf("invalid input type %s", in.String())
 		}
 		argsCelType = append(argsCelType, celType)
-		argsReflectType = append(argsReflectType, in)
 	}
 
 	out := typ.Out(0)
@@ -418,82 +419,44 @@ func (r *Registry) getOverloadOpt(typ reflect.Type, funVal reflect.Value) (out c
 		}
 	}
 
+	invoke := func(values ...ref.Val) ref.Val {
+		// Room for two arguments keeps unary and binary calls off the heap.
+		vals := make([]reflect.Value, 0, 2)
+		for i, value := range values {
+			val, err := convertToGoValue(value, rawTypes[i])
+			if err != nil {
+				return types.WrapErr(err)
+			}
+			vals = append(vals, val)
+		}
+		var results []reflect.Value
+		if typ.IsVariadic() {
+			// The last argument is a CEL list, which CallSlice spreads into the variadic parameter.
+			results = funVal.CallSlice(vals)
+		} else {
+			results = funVal.Call(vals)
+		}
+		if len(results) == 2 {
+			err, _ := results[1].Interface().(error)
+			if err != nil {
+				return types.WrapErr(err)
+			}
+		}
+		return r.NativeToValue(results[0].Interface())
+	}
+
 	switch numIn {
 	case 1:
 		return cel.UnaryBinding(func(value ref.Val) ref.Val {
-			v, err := value.ConvertToNative(rawTypes[0])
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			val, err := reflectFuncCall(funVal,
-				[]reflect.Value{
-					reflect.ValueOf(v),
-				},
-			)
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			return r.NativeToValue(val.Interface())
+			return invoke(value)
 		}), nil
 	case 2:
 		return cel.BinaryBinding(func(lhs ref.Val, rhs ref.Val) ref.Val {
-			lhv, err := lhs.ConvertToNative(rawTypes[0])
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			rhv, err := rhs.ConvertToNative(rawTypes[1])
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			val, err := reflectFuncCall(funVal,
-				[]reflect.Value{
-					reflect.ValueOf(lhv),
-					reflect.ValueOf(rhv),
-				},
-			)
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			return r.NativeToValue(val.Interface())
-		}), nil
-	case 0:
-		return cel.FunctionBinding(func(values ...ref.Val) ref.Val {
-			val, err := reflectFuncCall(funVal, []reflect.Value{})
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			return r.NativeToValue(val.Interface())
+			return invoke(lhs, rhs)
 		}), nil
 	default:
-		return cel.FunctionBinding(func(values ...ref.Val) ref.Val {
-			vals := make([]reflect.Value, 0, len(values))
-			for i, value := range values {
-				val, err := value.ConvertToNative(rawTypes[i])
-				if err != nil {
-					return types.WrapErr(err)
-				}
-				vals = append(vals,
-					reflect.ValueOf(val),
-				)
-			}
-			val, err := reflectFuncCall(funVal, vals)
-			if err != nil {
-				return types.WrapErr(err)
-			}
-			return r.NativeToValue(val.Interface())
-		}), nil
+		return cel.FunctionBinding(invoke), nil
 	}
-}
-
-func reflectFuncCall(funVal reflect.Value, values []reflect.Value) (reflect.Value, error) {
-	results := funVal.Call(values)
-	if len(results) == 2 {
-		err, _ := results[1].Interface().(error)
-		if err != nil {
-			return reflect.Value{}, err
-		}
-	}
-	return results[0], nil
 }
 
 func fieldNameWithTag(field reflect.StructField, tagName string) (name string, exported bool) {
