@@ -44,6 +44,9 @@ type convertType struct {
 
 func (tp *nativeTypeProvider) registerConversionsFunc(fun interface{}) error {
 	typ := reflect.TypeOf(fun)
+	if typ == nil {
+		return fmt.Errorf("RegisterConversion: conversion must not be nil")
+	}
 	if typ.Kind() != reflect.Func {
 		return fmt.Errorf("conversion must be a function")
 	}
@@ -286,15 +289,29 @@ func (tp *nativeTypeProvider) NewValue(typeName string, fields map[string]ref.Va
 		if !refFieldDef.IsExported() || !isSupportedType(refFieldDef.Type) {
 			return types.NewErr("no such field: %s", fieldName)
 		}
-		fieldVal, err := val.ConvertToNative(refFieldDef.Type)
+		refFieldVal, err := convertToGoValue(val, refFieldDef.Type)
 		if err != nil {
-			return types.NewErr(err.Error())
+			return types.WrapErr(err)
 		}
 		refField := refVal.FieldByIndex(refFieldDef.Index)
-		refFieldVal := reflect.ValueOf(fieldVal)
 		refField.Set(refFieldVal)
 	}
 	return tp.NativeToValue(refPtr.Interface())
+}
+
+// convertToGoValue converts a CEL value to a Go value of typ, ready to assign or pass to a reflect call.
+func convertToGoValue(val ref.Val, typ reflect.Type) (reflect.Value, error) {
+	v, err := val.ConvertToNative(typ)
+	if err != nil {
+		if val == types.NullValue && typ.Kind() == reflect.Pointer {
+			return reflect.Zero(typ), nil
+		}
+		return reflect.Value{}, err
+	}
+	if v == nil {
+		return reflect.Zero(typ), nil
+	}
+	return reflect.ValueOf(v), nil
 }
 
 // NativeToValue adapts native values to CEL values and will proxy to the composed type adapter
