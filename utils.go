@@ -6,63 +6,59 @@ import (
 	"github.com/google/cel-go/cel"
 )
 
+var typeValueMap cache[reflect.Type, *cel.Type]
+
 // convertToCelType converts the Golang reflect.Type to CEL type
 func convertToCelType(refType reflect.Type) (*cel.Type, bool) {
+	typ, ok := typeValueMap.load(refType)
+	if ok {
+		return typ, typ != nil
+	}
+
 	switch refType.Kind() {
 	case reflect.Pointer:
-		ptrType, ok := convertToCelType(refType.Elem())
-		if !ok {
-			return nil, false
+		if ptrType, ok := convertToCelType(refType.Elem()); ok {
+			typ = cel.NullableType(ptrType)
 		}
-		return cel.NullableType(ptrType), true
 	case reflect.Bool:
-		return cel.BoolType, true
+		typ = cel.BoolType
 	case reflect.Float32, reflect.Float64:
-		return cel.DoubleType, true
+		typ = cel.DoubleType
 	case reflect.Int64:
-		if refType == durationType || refType == typesDurationType {
-			return cel.DurationType, true
+		if refType == durationType {
+			typ = cel.DurationType
+		} else {
+			typ = cel.IntType
 		}
-		return cel.IntType, true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
-		return cel.IntType, true
+		typ = cel.IntType
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return cel.UintType, true
+		typ = cel.UintType
 	case reflect.String:
-		return cel.StringType, true
+		typ = cel.StringType
 	case reflect.Slice:
 		refElem := refType.Elem()
 		if refElem == byteType {
-			return cel.BytesType, true
+			typ = cel.BytesType
+		} else if elemType, ok := convertToCelType(refElem); ok {
+			typ = cel.ListType(elemType)
 		}
-		elemType, ok := convertToCelType(refElem)
-		if !ok {
-			return nil, false
-		}
-		return cel.ListType(elemType), true
 	case reflect.Array:
-		elemType, ok := convertToCelType(refType.Elem())
-		if !ok {
-			return nil, false
+		if elemType, ok := convertToCelType(refType.Elem()); ok {
+			typ = cel.ListType(elemType)
 		}
-		return cel.ListType(elemType), true
 	case reflect.Map:
-		keyType, ok := convertToCelType(refType.Key())
-		if !ok {
-			return nil, false
+		keyType, keyOK := convertToCelType(refType.Key())
+		elemType, elemOK := convertToCelType(refType.Elem())
+		if keyOK && elemOK {
+			typ = cel.MapType(keyType, elemType)
 		}
-		elemType, ok := convertToCelType(refType.Elem())
-		if !ok {
-			return nil, false
-		}
-		return cel.MapType(keyType, elemType), true
 	case reflect.Struct:
-		if refType == timestampType || refType == typesTimestampType {
-			return cel.TimestampType, true
-		}
-		return cel.ObjectType(rawTypeName(refType)), true
+		// rawTypeName gives time.Time, types.Timestamp and types.Duration the names of well-known types
+		typ = cel.ObjectType(rawTypeName(refType), getTrait(refType))
 	case reflect.Interface:
-		return cel.DynType, true
+		typ = cel.DynType
 	}
-	return nil, false
+	typ = typeValueMap.store(refType, typ)
+	return typ, typ != nil
 }

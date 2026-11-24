@@ -84,13 +84,13 @@ func TestCachesConcurrentUse(t *testing.T) {
 		go func(typ reflect.Type) {
 			defer wg.Done()
 			<-start
-			// getTypeValue calls itself for the element type of a pointer, and calls getTrait for a struct.
-			getTypeValue(reflect.PointerTo(typ))
+			// convertToCelType calls itself for the element type of a pointer, and calls getTrait for a struct.
+			convertToCelType(reflect.PointerTo(typ))
 			getTrait(typ)
 			getStructFieldMap(typ, "json")
 			getStructFields(typ, "json")
 
-			getTypeValue(sharedType)
+			convertToCelType(sharedType)
 			getStructFieldMap(sharedType, "json")
 			getStructFields(sharedType, "json")
 		}(typ)

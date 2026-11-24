@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
@@ -54,51 +53,6 @@ func (c *cache[K, V]) load(key K) (V, bool) {
 func (c *cache[K, V]) store(key K, val V) V {
 	actual, _ := c.m.LoadOrStore(key, val)
 	return actual.(V)
-}
-
-var typeValueMap cache[reflect.Type, *types.Type]
-
-func getTypeValue(rawType reflect.Type) (typ *types.Type) {
-	typ, ok := typeValueMap.load(rawType)
-	if ok {
-		return typ
-	}
-
-	switch rawType.Kind() {
-	case reflect.Struct:
-		typ = cel.ObjectType(rawTypeName(rawType), getTrait(rawType))
-	case reflect.Bool:
-		typ = cel.BoolType
-	case reflect.Float32, reflect.Float64:
-		typ = cel.DoubleType
-	case reflect.Int64:
-		if rawType == durationType || rawType == typesDurationType {
-			typ = cel.DurationType
-		} else {
-			typ = cel.IntType
-		}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
-		typ = cel.IntType
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		typ = cel.UintType
-	case reflect.String:
-		typ = cel.StringType
-	case reflect.Slice:
-		rawElem := rawType.Elem()
-		if rawElem == byteType {
-			typ = cel.BytesType
-		} else {
-			typ = cel.ListType(getTypeValue(rawElem))
-		}
-	case reflect.Array:
-		typ = cel.ListType(getTypeValue(rawType.Elem()))
-	case reflect.Map:
-		typ = cel.MapType(getTypeValue(rawType.Key()), getTypeValue(rawType.Elem()))
-	case reflect.Ptr:
-		typ = cel.NullableType(getTypeValue(rawType.Elem()))
-	}
-
-	return typeValueMap.store(rawType, typ)
 }
 
 var typeTraitMap cache[reflect.Type, int]
